@@ -5,11 +5,11 @@ from api_helper import ShoonyaApiPy
 # --- PAGE SETUP ---
 st.set_page_config(page_title="MKPV ULTRA SNIPER V3", layout="wide")
 
-# --- SESSION STATE (Sabse Zaroori Fix) ---
+# --- SESSION STATE INITIALIZATION (The Permanent Fix) ---
 if 'api' not in st.session_state: st.session_state.api = ShoonyaApiPy()
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'locked_entry' not in st.session_state: st.session_state.locked_entry = 0
-if 'entry_type' not in st.session_state: st.session_state.entry_type = "" # Ise fix kiya gaya hai
+if 'entry_type' not in st.session_state: st.session_state.entry_type = "" 
 if 'stats' not in st.session_state: st.session_state.stats = {"Target": 0, "SL": 0}
 if 'history' not in st.session_state: st.session_state.history = []
 
@@ -42,7 +42,8 @@ else:
             st.session_state.logged_in = False
             st.rerun()
 
-    placeholder = st.empty()
+    # Empty container to prevent jumping/blinking
+    dashboard_container = st.empty()
 
     try:
         q = st.session_state.api.get_quotes(exchange="NSE", token=st.session_state.token)
@@ -55,26 +56,27 @@ else:
             
             trend = lp > pivot
             safety = 100 if (lp > pivot + 5 or lp < pivot - 5) else 75
-            signal = "CALL BUY ✅" if trend else "PUT BUY 🔥"
+            current_signal = "CALL BUY ✅" if trend else "PUT BUY 🔥"
             color = "blue" if trend else "red"
 
-            with placeholder.container():
+            with dashboard_container.container():
                 m1, m2, m3 = st.columns(3)
                 m1.metric("LTP", f"₹{lp}", delta=round(lp-pc, 2))
                 m2.metric("SAFETY", f"{safety}%")
                 m3.metric("PIVOT", f"{pivot}")
 
-                st.markdown(f"<div style='background-color:{color};padding:20px;border-radius:10px;text-align:center'><h1 style='color:white'>SIGNAL: {signal}</h1></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='background-color:{color};padding:20px;border-radius:10px;text-align:center'><h1 style='color:white'>SIGNAL: {current_signal}</h1></div>", unsafe_allow_html=True)
                 
-                # AUTO ENTRY LOGIC
+                # AUTO ENTRY ENGINE
                 if st.session_state.locked_entry == 0 and safety >= 75:
                     st.session_state.locked_entry = lp
-                    st.session_state.entry_type = signal # Yahan entry type set ho raha hai
+                    st.session_state.entry_type = current_signal # Yahan save ho raha hai
 
-                # TRADE MONITORING
-                if st.session_state.locked_entry > 0:
+                # TRADE MONITORING (Safe Check)
+                if st.session_state.locked_entry > 0 and st.session_state.entry_type != "":
                     is_call = "CALL" in st.session_state.entry_type
                     pnl = round(lp - st.session_state.locked_entry if is_call else st.session_state.locked_entry - lp, 2)
+                    
                     st.warning(f"⚡ ACTIVE TRADE | ENTRY: {st.session_state.locked_entry} | P&L: {pnl} pts")
                     
                     if pnl >= 40 or pnl <= -20:
@@ -82,16 +84,19 @@ else:
                         st.session_state.stats[res] += 1
                         st.session_state.history.append({"Time": time.strftime("%H:%M:%S"), "Type": st.session_state.entry_type, "P&L": pnl})
                         st.session_state.locked_entry = 0
+                        st.session_state.entry_type = "" # Reset for next trade
                         if pnl >= 40: st.balloons()
 
                 if st.session_state.history:
                     st.subheader("📜 Today's Log")
                     st.dataframe(pd.DataFrame(st.session_state.history).tail(5), use_container_width=True)
         else:
-            st.warning("🔄 Waiting for Live Data...")
+            st.info("🔄 Waiting for Live Data... Check if Market is Open.")
 
     except Exception as e:
-        st.error(f"❌ Error: {e}")
+        # Detailed error logging to see exactly where it fails
+        st.error(f"❌ System Error: {str(e)}")
 
+    # Time delay to slow down the blinking
     time.sleep(2)
     st.rerun()
