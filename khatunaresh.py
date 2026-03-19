@@ -1,4 +1,4 @@
-import time, pandas as pd, pytz
+import time, pandas as pd, pytz, numpy as np
 from datetime import datetime
 import streamlit as st
 from api_helper import ShoonyaApiPy
@@ -20,24 +20,24 @@ if not st.session_state.logged_in:
     USER, PWD, VC, KEY = "FN183822", "PSbana@321", "FN183822_U", "e6006270e8270b71a12afe278e927f19"
     idx = st.radio("Select Index:", ["NIFTY", "BANKNIFTY"])
     totp = st.text_input("Enter Fresh TOTP:", type="password")
-    if st.button("Launch Dashboard 🚀"):
+    if st.button("Launch Advanced Dashboard 🚀"):
         ret = st.session_state.api.login(userid=USER, password=PWD, twoFA=totp, vendor_code=VC, api_secret=KEY, imei="abc1234")
         if ret and ret.get('stat') == 'Ok':
             st.session_state.logged_in = True
             st.session_state.token = "26000" if idx == "NIFTY" else "26009"
             st.rerun()
 else:
-    with st.sidebar:
-        st.header("📊 Performance")
-        st.success(f"🎯 Targets: {st.session_state.stats['Target']}")
-        st.error(f"🛑 SL Hits: {st.session_state.stats['SL']}")
-        if st.button("Logout 🛑"):
-            st.session_state.logged_in = False
-            st.rerun()
+    # --- DASHBOARD UI ---
+    st.sidebar.title("📊 Performance")
+    st.sidebar.success(f"🎯 Targets: {st.session_state.stats['Target']}")
+    st.sidebar.error(f"🛑 SL Hits: {st.session_state.stats['SL']}")
+    if st.sidebar.button("Logout 🛑"):
+        st.session_state.logged_in = False
+        st.rerun()
 
     placeholder = st.empty()
 
-    while st.session_state.logged_in:
+    while True:
         try:
             q = st.session_state.api.get_quotes(exchange="NSE", token=st.session_state.token)
             if q and 'lp' in q:
@@ -49,58 +49,66 @@ else:
                 pivot = round((high + low + pc) / 3, 2)
                 
                 if st.session_state.start_oi == 0: st.session_state.start_oi = toi
+
+                # --- NEW: VOLATILITY & CONDITION LOGIC ---
+                range_pct = round(((high - low) / lp) * 100, 2)
+                volatility = "HIGH 🔥" if range_pct > 0.5 else "LOW 🧊" if range_pct < 0.2 else "NORMAL ✅"
                 
-                # --- SIDEWAYS DETECTION LOGIC ---
-                # Nifty ke liye 7 points aur BankNifty ke liye 15 points ka buffer
-                buffer = 7 if st.session_state.token == "26000" else 15
-                is_sideways = abs(lp - pivot) < buffer
-                
+                # Sideways vs Trending
+                buffer = 10 if st.session_state.token == "26000" else 25
+                if abs(lp - pivot) < buffer:
+                    market_cond, cond_color = "SIDEWAYS 😴", "orange"
+                elif lp > pivot:
+                    market_cond, cond_color = "BULLISH 🚀", "green"
+                else:
+                    market_cond, cond_color = "BEARISH 📉", "red"
+
                 # Logic Checklist
                 c_trend, c_sent = (lp > pivot), (lp > pc)
                 p_trend, p_sent = (lp < pivot), (lp < pc)
-                oi_ok = (toi >= st.session_state.start_oi) if toi > 0 else True
-                vol_ok = (vol > 0)
-
-                if is_sideways:
-                    signal, color, safety = "SIDEWAYS 😴", "orange", 0
-                elif lp > pivot:
-                    score = sum([c_trend, c_sent, oi_ok, vol_ok])
-                    signal, color, safety = "CALL BUY ✅", "blue", round((score / 4) * 100)
-                else:
-                    score = sum([p_trend, p_sent, oi_ok, vol_ok])
-                    signal, color, safety = "PUT BUY 🔥", "red", round((score / 4) * 100)
+                oi_ok = (toi >= st.session_state.start_oi)
                 
+                # Score & Signal
+                score = sum([c_trend if lp > pivot else p_trend, c_sent if lp > pivot else p_sent, oi_ok, vol > 0])
+                safety = round((score / 4) * 100)
+                
+                signal = "CALL BUY ✅" if lp > pivot else "PUT BUY 🔥"
+                if "SIDEWAYS" in market_cond: signal, safety = "WAITING 🕒", 0
+                color = "blue" if "CALL" in signal else "red" if "PUT" in signal else "orange"
+
                 curr_time = datetime.now(IST).strftime("%H:%M:%S")
 
                 with placeholder.container():
                     st.title(f"🚀 MKPV ULTRA SNIPER V3 | {curr_time}")
                     
+                    # 1. Advanced Metrics
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("LTP", f"₹{lp}", delta=round(lp-pc, 2))
-                    m2.metric("SAFETY", f"{safety}%")
-                    m3.metric("OI", toi, delta=toi - st.session_state.start_oi)
-                    m4.metric("PIVOT", pivot)
+                    m2.metric("VOLATILITY", volatility, help=f"Range: {range_pct}%")
+                    m3.metric("OI DELTA", toi - st.session_state.start_oi)
+                    m4.metric("CONDITION", market_cond)
 
-                    st.subheader("📋 Sniper Logic Checklist")
+                    # 2. Daily Range
+                    st.write(f"📉 **Day Range:** Low: `{low}` <---> High: `{high}` | **Pivot:** `{pivot}`")
+
+                    # 3. Logic Checklist
+                    st.subheader("📋 Sniper Checklist")
                     l1, l2 = st.columns(2)
-                    with l1:
-                        st.write(f"{'✅' if c_trend else '❌'} CALL Trend | {'✅' if c_sent else '❌'} Sent")
-                    with l2:
-                        st.write(f"{'✅' if p_trend else '❌'} PUT Trend | {'✅' if p_sent else '❌'} Sent")
-                    
-                    st.write(f"{'✅' if oi_ok else '❌'} OI Support | {'⚠️ SIDEWAYS' if is_sideways else '✅ TRENDING'}")
+                    with l1: st.write(f"{'✅' if c_trend else '❌'} CALL Trend | {'✅' if c_sent else '❌'} Sent")
+                    with l2: st.write(f"{'✅' if p_trend else '❌'} PUT Trend | {'✅' if p_sent else '❌'} Sent")
+                    st.write(f"{'✅' if oi_ok else '❌'} OI Support | {'✅' if vol > 0 else '❌'} Volume")
 
-                    st.markdown(f"<div style='background-color:{color};padding:20px;border-radius:10px;text-align:center'><h1 style='color:white'>SIGNAL: {signal}</h1></div>", unsafe_allow_html=True)
+                    # 4. Signal Box
+                    st.markdown(f"<div style='background-color:{color};padding:25px;border-radius:15px;text-align:center'><h1 style='color:white;margin:0;'>SIGNAL: {signal} ({safety}%)</h1></div>", unsafe_allow_html=True)
 
-                    # --- TRADE ENGINE (Added Sideways Check) ---
-                    if st.session_state.locked_entry == 0 and safety >= 75 and not is_sideways:
-                        st.session_state.locked_entry = lp
-                        st.session_state.entry_type = signal
+                    # 5. Trade Tracking
+                    if st.session_state.locked_entry == 0 and safety >= 75 and "WAITING" not in signal:
+                        st.session_state.locked_entry, st.session_state.entry_type = lp, signal
 
                     if st.session_state.locked_entry > 0:
                         is_call = "CALL" in st.session_state.entry_type
                         pnl = round(lp - st.session_state.locked_entry if is_call else st.session_state.locked_entry - lp, 2)
-                        st.warning(f"⚡ ACTIVE: {st.session_state.entry_type} | Entry: {st.session_state.locked_entry} | P&L: {pnl}")
+                        st.warning(f"⚡ ACTIVE: {st.session_state.entry_type} | Entry: {st.session_state.locked_entry} | P&L: {pnl} pts")
                         
                         if pnl >= 40 or pnl <= -20:
                             res = "Target" if pnl >= 40 else "SL"
@@ -110,8 +118,8 @@ else:
                             if pnl >= 40: st.balloons()
 
                     if st.session_state.history:
-                        st.subheader("📜 Today's Trade History")
-                        st.table(pd.DataFrame(st.session_state.history))
+                        st.subheader("📜 Today's Log")
+                        st.table(pd.DataFrame(st.session_state.history).tail(5))
 
             time.sleep(2)
         except: time.sleep(2)
