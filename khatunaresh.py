@@ -1,132 +1,126 @@
-import time, pandas as pd, pytz
-from datetime import datetime
 import streamlit as st
+import pandas as pd
+import time
+from datetime import datetime
 from api_helper import ShoonyaApiPy
 
-# --- INITIAL SETUP ---
-IST = pytz.timezone('Asia/Kolkata')
-st.set_page_config(page_title="MKPV SNIPER PRO", layout="wide")
+# --- CONFIG ---
+USER, PWD, VC, KEY = "FN183822", "PSbana@321", "FN183822_U", "e6006270e8270b71a12afe278e927f19"
 
-# --- SESSION STATE (Data Persistence) ---
-if 'api' not in st.session_state: st.session_state.api = ShoonyaApiPy()
-if 'logged_in' not in st.session_state: st.session_state.logged_in = False
-if 'locked_entry' not in st.session_state: st.session_state.locked_entry = 0
-if 'stats' not in st.session_state: st.session_state.stats = {"Target": 0, "SL": 0}
-if 'history' not in st.session_state: st.session_state.history = []
-if 'start_oi' not in st.session_state: st.session_state.start_oi = 0
+# Session State Initialization (Data save karne ke liye)
+if 'trade_history' not in st.session_state:
+    st.session_state.trade_history = []
+if 'locked_entry' not in st.session_state:
+    st.session_state.locked_entry = 0
+if 'api_instance' not in st.session_state:
+    st.session_state.api_instance = ShoonyaApiPy()
+    st.session_state.logged_in = False
 
-# --- LOGIN UI ---
-if not st.session_state.logged_in:
-    st.title("🏹 MKPV SNIPER - ORIGINAL LOGIC")
-    USER, PWD, VC, KEY = "FN183822", "PSbana@321", "FN183822_U", "e6006270e8270b71a12afe278e927f19"
-    idx = st.radio("Select Index:", ["NIFTY", "BANKNIFTY"])
-    totp = st.text_input("Enter Fresh TOTP:", type="password")
-    if st.button("Launch Dashboard 🚀"):
-        ret = st.session_state.api.login(userid=USER, password=PWD, twoFA=totp, vendor_code=VC, api_secret=KEY, imei="abc1234")
-        if ret and ret.get('stat') == 'Ok':
+api = st.session_state.api_instance
+
+# --- FUNCTIONS ---
+def fetch_data(token):
+    try:
+        q = api.get_quotes(exchange="NSE", token=token)
+        if not q or 'lp' not in q: return None
+        lp, pc = float(q['lp']), float(q.get('c', q['lp']))
+        toi, vol = int(q.get('toi', 0)), int(q.get('v', 0))
+        high, low = float(q.get('h', lp)), float(q.get('l', lp))
+        hist = api.get_time_price_series(exchange="NSE", token=token, interval=5)
+        if hist and isinstance(hist, list) and len(hist) > 10:
+            df = pd.DataFrame(hist)
+            df['intc'] = df['intc'].astype(float)
+            sma = round(df['intc'].tail(10).mean(), 2)
+            pivot = round((high + low + pc) / 3, 2)
+            r1 = round((2 * pivot) - low, 2)
+            s1 = round((2 * pivot) - high, 2)
+            return lp, pc, sma, toi, vol, s1, r1, pivot
+        return None
+    except: return None
+
+# --- UI LAYOUT ---
+st.set_page_config(page_title="GRK WARRIOR V3", layout="wide")
+st.title("🚀 MKPV ULTRA SNIPER V3")
+
+# Sidebar for Login
+with st.sidebar:
+    idx = st.radio("Select Index", ["NIFTY", "BANKNIFTY"])
+    token = "26000" if idx == "NIFTY" else "26009"
+    totp = st.text_input("Enter TOTP", type="password")
+    if st.button("Login"):
+        res = api.login(userid=USER, password=PWD, twoFA=totp, vendor_code=VC, api_secret=KEY, imei="abc1234")
+        if res: 
             st.session_state.logged_in = True
-            st.session_state.token = "26000" if idx == "NIFTY" else "26009"
-            st.rerun()
-else:
-    # Sidebar
-    with st.sidebar:
-        st.header("📊 Performance")
-        st.success(f"🎯 Targets: {st.session_state.stats['Target']}")
-        st.error(f"🛑 SL Hits: {st.session_state.stats['SL']}")
-        if st.button("Logout 🛑"):
-            st.session_state.logged_in = False
-            st.rerun()
+            st.success("Logged In!")
 
+if st.session_state.logged_in:
     placeholder = st.empty()
+    start_oi = 0
 
-    while st.session_state.logged_in:
-        try:
-            # --- AAPKA ORIGINAL FETCH LOGIC ---
-            q = st.session_state.api.get_quotes(exchange="NSE", token=st.session_state.token)
-            hist = st.session_state.api.get_time_price_series(exchange="NSE", token=st.session_state.token, interval=5)
+    while True:
+        data = fetch_data(token)
+        if data:
+            lp, pc, sma, toi, vol, s1, r1, pivot = data
+            if start_oi == 0: start_oi = toi
             
-            if q and 'lp' in q and hist:
-                lp = float(q['lp'])
-                pc = float(q.get('c', lp))
-                toi = int(q.get('toi', 0))
-                vol = int(q.get('v', 0))
-                high, low = float(q.get('h', lp)), float(q.get('l', lp))
+            # --- SAME LOGIC (Unchanged) ---
+            c_trend, c_sent = (lp > sma), (lp > pc)
+            c_oi = (toi >= start_oi) if toi > 0 else True 
+            c_vol = (vol > 0) if vol > 0 else True
+            p_trend, p_sent = (lp < sma), (lp < pc)
+            p_oi = (toi >= start_oi) if toi > 0 else True
+            p_vol = (vol > 0) if vol > 0 else True
+
+            c_score = sum([c_trend, c_sent, c_oi, c_vol])
+            p_score = sum([p_trend, p_sent, p_oi, p_vol])
+
+            if c_score >= 3 and lp > sma:
+                status, safety = "CALL BUY ✅", round((c_score/4)*100, 1)
+            elif p_score >= 3 and lp < sma:
+                status, safety = "PUT BUY 🔥", round((p_score/4)*100, 1)
+            else:
+                status, safety = "SCANNING 📡", 0.0
+
+            # --- DISPLAY DASHBOARD ---
+            with placeholder.container():
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("LTP", lp)
+                col2.metric("SMA (10)", sma)
+                col3.metric("SAFETY", f"{safety}%")
+                col4.metric("PIVOT", pivot)
+
+                st.subheader(f"SIGNAL: {status}")
                 
-                # SMA Calculation (Exactly as per your code)
-                df = pd.DataFrame(hist)
-                sma = round(df['intc'].astype(float).tail(10).mean(), 2)
-                
-                # Pivot Levels (Exactly as per your code)
-                pivot = round((high + low + pc) / 3, 2)
-                r1 = round((2 * pivot) - low, 2)
-                s1 = round((2 * pivot) - high, 2)
-                
-                if st.session_state.start_oi == 0: st.session_state.start_oi = toi
-                
-                # --- AAPKA ORIGINAL SMART CHECKLIST ---
-                c_trend, c_sent = (lp > sma), (lp > pc)
-                c_oi = (toi >= st.session_state.start_oi) if toi > 0 else True 
-                c_vol = (vol > 0) if vol > 0 else True
+                # Trade Execution Logic
+                if safety >= 75.0 and st.session_state.locked_entry == 0:
+                    st.session_state.locked_entry = lp
+                    st.session_state.trade_type = status
 
-                p_trend, p_sent = (lp < sma), (lp < pc)
-                p_oi = (toi >= st.session_state.start_oi) if toi > 0 else True
-                p_vol = (vol > 0) if vol > 0 else True
+                if st.session_state.locked_entry > 0:
+                    entry = st.session_state.locked_entry
+                    is_call = "CALL" in st.session_state.trade_type
+                    pnl = round(lp - entry if is_call else entry - lp, 2)
+                    sl = round(entry - 20 if is_call else entry + 20, 2)
+                    tgt = round(entry + 40 if is_call else entry - 40, 2)
 
-                c_score = sum([c_trend, c_sent, c_oi, c_vol])
-                p_score = sum([p_trend, p_sent, p_oi, p_vol])
+                    st.info(f"🚀 ACTIVE TRADE | ENTRY: {entry} | SL: {sl} | TGT: {tgt}")
+                    st.warning(f"💰 LIVE P&L: {pnl} Points")
 
-                if c_score >= 3 and lp > sma:
-                    status, color, safety = "CALL BUY ✅", "blue", round((c_score/4)*100, 1)
-                elif p_score >= 3 and lp < sma:
-                    status, color, safety = "PUT BUY 🔥", "red", round((p_score/4)*100, 1)
-                else:
-                    status, color, safety = "SCANNING 📡", "grey", 0.0
+                    # Exit Logic & History Save
+                    if pnl >= 40 or pnl <= -20:
+                        st.session_state.trade_history.append({
+                            "Time": datetime.now().strftime("%H:%M:%S"),
+                            "Type": st.session_state.trade_type,
+                            "Entry": entry,
+                            "Exit": lp,
+                            "P&L": pnl
+                        })
+                        st.session_state.locked_entry = 0
 
-                curr_time = datetime.now(IST).strftime("%H:%M:%S")
+                # History Table
+                if st.session_state.trade_history:
+                    st.divider()
+                    st.subheader("📜 Historical Trades")
+                    st.table(pd.DataFrame(st.session_state.trade_history))
 
-                with placeholder.container():
-                    st.title(f"🚀 MKPV ULTRA SNIPER V3 | {curr_time}")
-                    
-                    # Dashboard Metrics
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("LTP", f"₹{lp}", delta=round(lp-sma, 2))
-                    m2.metric("SMA (10)", f"{sma}")
-                    m3.metric("SAFETY", f"{safety}%")
-                    m4.metric("PIVOT", f"{pivot}")
-
-                    # Logic Checklist Display
-                    st.subheader("📋 Original Logic Checklist")
-                    l1, l2 = st.columns(2)
-                    with l1:
-                        st.write(f"**CALL:** {'✅' if c_trend else '❌'} Trend | {'✅' if c_sent else '❌'} Sentiment | {'✅' if c_oi else '❌'} OI | {'✅' if c_vol else '❌'} Vol")
-                    with l2:
-                        st.write(f"**PUT :** {'✅' if p_trend else '❌'} Trend | {'✅' if p_sent else '❌'} Sentiment | {'✅' if p_oi else '❌'} OI | {'✅' if p_vol else '❌'} Vol")
-
-                    # Signal Box
-                    st.markdown(f"<div style='background-color:{color};padding:20px;border-radius:10px;text-align:center'><h1 style='color:white'>SIGNAL: {status}</h1></div>", unsafe_allow_html=True)
-                    st.write(f"📡 **LEVELS:** S1: `{s1}` | R1: `{r1}`")
-
-                    # --- AAPKA ORIGINAL TRADE ENGINE ---
-                    if safety >= 75.0 and st.session_state.locked_entry == 0:
-                        st.session_state.locked_entry = lp
-                        st.session_state.entry_type = status
-
-                    if st.session_state.locked_entry > 0:
-                        is_call = "CALL" in st.session_state.entry_type
-                        pnl = round(lp - st.session_state.locked_entry if is_call else st.session_state.locked_entry - lp, 2)
-                        st.warning(f"🚀 ACTIVE TRADE! | Entry: {st.session_state.locked_entry} | Live P&L: {pnl} Pts")
-                        
-                        # Target/SL as per your code (40/20)
-                        if pnl >= 40 or pnl <= -20:
-                            res = "Target" if pnl >= 40 else "SL"
-                            st.session_state.stats[res] += 1
-                            st.session_state.history.append({"Time": curr_time, "Type": st.session_state.entry_type, "Entry": st.session_state.locked_entry, "Exit": lp, "P&L": pnl, "Safety": f"{safety}%"})
-                            st.session_state.locked_entry = 0
-                            if pnl >= 40: st.balloons()
-
-                    if st.session_state.history:
-                        st.subheader("📜 Today's Log")
-                        st.table(pd.DataFrame(st.session_state.history).tail(5))
-
-            time.sleep(3) # Exact 3 second delay as per your code
-        except: time.sleep(3)
+        time.sleep(2)
