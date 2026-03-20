@@ -7,7 +7,6 @@ from api_helper import ShoonyaApiPy
 # --- CONFIG ---
 USER, PWD, VC, KEY = "FN183822", "PSbana@321", "FN183822_U", "e6006270e8270b71a12afe278e927f19"
 
-# Session State Initialization (Data save karne ke liye)
 if 'trade_history' not in st.session_state:
     st.session_state.trade_history = []
 if 'locked_entry' not in st.session_state:
@@ -18,7 +17,7 @@ if 'api_instance' not in st.session_state:
 
 api = st.session_state.api_instance
 
-# --- FUNCTIONS ---
+# --- FETCH DATA ---
 def fetch_data(token):
     try:
         q = api.get_quotes(exchange="NSE", token=token)
@@ -38,11 +37,11 @@ def fetch_data(token):
         return None
     except: return None
 
-# --- UI LAYOUT ---
+# --- UI SETTINGS ---
 st.set_page_config(page_title="GRK WARRIOR V3", layout="wide")
 st.title("🚀 MKPV ULTRA SNIPER V3")
 
-# Sidebar for Login
+# Sidebar
 with st.sidebar:
     idx = st.radio("Select Index", ["NIFTY", "BANKNIFTY"])
     token = "26000" if idx == "NIFTY" else "26009"
@@ -63,7 +62,7 @@ if st.session_state.logged_in:
             lp, pc, sma, toi, vol, s1, r1, pivot = data
             if start_oi == 0: start_oi = toi
             
-            # --- SAME LOGIC (Unchanged) ---
+            # --- AAPKA ORIGINAL LOGIC ---
             c_trend, c_sent = (lp > sma), (lp > pc)
             c_oi = (toi >= start_oi) if toi > 0 else True 
             c_vol = (vol > 0) if vol > 0 else True
@@ -81,17 +80,32 @@ if st.session_state.logged_in:
             else:
                 status, safety = "SCANNING 📡", 0.0
 
+            def icon(v): return "✅" if v else "❌"
+
             # --- DISPLAY DASHBOARD ---
             with placeholder.container():
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("LTP", lp)
-                col2.metric("SMA (10)", sma)
-                col3.metric("SAFETY", f"{safety}%")
-                col4.metric("PIVOT", pivot)
+                # Top Metrics
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("LTP", lp)
+                m2.metric("SMA (10)", sma)
+                m3.metric("SAFETY", f"{safety}%")
+                m4.metric("PIVOT", pivot)
 
-                st.subheader(f"SIGNAL: {status}")
+                st.divider()
+
+                # CHECKLIST SECTION (Wapas add kiya gaya hai)
+                st.subheader("📋 Original Logic Checklist")
+                col_c, col_p = st.columns(2)
                 
-                # Trade Execution Logic
+                with col_c:
+                    st.markdown(f"**CALL:** Trend {icon(c_trend)} | Sent {icon(c_sent)} | OI {icon(c_oi)} | Vol {icon(c_vol)}")
+                with col_p:
+                    st.markdown(f"**PUT:** Trend {icon(p_trend)} | Sent {icon(p_sent)} | OI {icon(p_oi)} | Vol {icon(p_vol)}")
+                
+                st.info(f"📡 LEVELS: S1: {s1} | R1: {r1}")
+                st.subheader(f"SIGNAL: {status}")
+
+                # Trade Management
                 if safety >= 75.0 and st.session_state.locked_entry == 0:
                     st.session_state.locked_entry = lp
                     st.session_state.trade_type = status
@@ -103,24 +117,21 @@ if st.session_state.logged_in:
                     sl = round(entry - 20 if is_call else entry + 20, 2)
                     tgt = round(entry + 40 if is_call else entry - 40, 2)
 
-                    st.info(f"🚀 ACTIVE TRADE | ENTRY: {entry} | SL: {sl} | TGT: {tgt}")
+                    st.success(f"🚀 ACTIVE TRADE | ENTRY: {entry} | SL: {sl} | TGT: {tgt}")
                     st.warning(f"💰 LIVE P&L: {pnl} Points")
 
-                    # Exit Logic & History Save
                     if pnl >= 40 or pnl <= -20:
                         st.session_state.trade_history.append({
                             "Time": datetime.now().strftime("%H:%M:%S"),
                             "Type": st.session_state.trade_type,
-                            "Entry": entry,
-                            "Exit": lp,
-                            "P&L": pnl
+                            "Entry": entry, "Exit": lp, "P&L": pnl
                         })
                         st.session_state.locked_entry = 0
 
-                # History Table
+                # History
                 if st.session_state.trade_history:
                     st.divider()
                     st.subheader("📜 Historical Trades")
-                    st.table(pd.DataFrame(st.session_state.trade_history))
+                    st.dataframe(pd.DataFrame(st.session_state.trade_history), use_container_width=True)
 
         time.sleep(2)
