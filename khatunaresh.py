@@ -1,100 +1,169 @@
-import streamlit as st
-import pandas as pd
-import time
-from datetime import datetime
+import time, os, pandas as pd
 from api_helper import ShoonyaApiPy
 
-# --- CONFIG ---
-USER, PWD, VC, KEY = "FN183822", "PSbana@321", "FN183822_U", "e6006270e8270b71a12afe278e927f19"
+# ========= CONFIG =========
+USER, PWD, VC, KEY = "YOUR_ID", "YOUR_PASS", "YOUR_VC", "YOUR_KEY"
+MAX_TRADES = 5
+COOLDOWN = 60
+# Note: Adjust MAX_DAILY_LOSS to points * lot size (e.g., -1000 for 20 pts Nifty)
+MAX_DAILY_LOSS = -2000 
 
-# Streamlit autorefresh component ko install karna padega (pip install streamlit-autorefresh)
-# Agar install nahi karna chahte toh hum code ko refresh trigger denge.
+api = ShoonyaApiPy()
 
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-if 'trade_history' not in st.session_state:
-    st.session_state.trade_history = []
-if 'locked_entry' not in st.session_state:
-    st.session_state.locked_entry = 0
-if 'start_oi' not in st.session_state:
-    st.session_state.start_oi = 0
-if 'api' not in st.session_state:
-    st.session_state.api = ShoonyaApiPy()
+# ========= GLOBAL STATS =========
+trade_count = 0
+daily_pnl = 0
+last_trade_time = 0
+locked_entry = 0
+trade_type = None
+trail_sl = 0
+prev_oi = 0
+prev_price = 0
 
-api = st.session_state.api
+# ========= TECHNICALS =========
+def rsi_calc(series, period=14):
+    """Standard RSI with Wilder's Smoothing (EWM)"""
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
-# --- UI SETTINGS ---
-st.set_page_config(page_title="GRK WARRIOR V3", layout="wide")
-st.title("🚀 MKPV ULTRA SNIPER V3")
-
-with st.sidebar:
-    idx = st.radio("Select Index", ["NIFTY", "BANKNIFTY"])
-    token = "26000" if idx == "NIFTY" else "26009"
-    totp = st.text_input("Enter Fresh TOTP", type="password")
-    if st.button("Login"):
-        res = api.login(userid=USER, password=PWD, twoFA=totp, vendor_code=VC, api_secret=KEY, imei="abc1234")
-        if res and res.get('stat') == 'Ok':
-            st.session_state.logged_in = True
-            st.rerun() # Refresh screen after login
-
-# --- MAIN ENGINE ---
-if st.session_state.logged_in:
-    # DATA FETCHING (Logic unchanged)
-    q = api.get_quotes(exchange="NSE", token=token)
-    if q and 'lp' in q:
-        lp, pc = float(q['lp']), float(q.get('c', q['lp']))
-        toi, vol = int(q.get('toi', 0)), int(q.get('v', 0))
-        high, low = float(q.get('h', lp)), float(q.get('l', lp))
+def fetch_data(token):
+    try:
+        # 1. Get Live Quote
+        q = api.get_quotes(exchange="NSE", token=token)
+        if not q or 'lp' not in q: return None
         
+        lp = float(q['lp'])
+        toi = int(q.get('toi', 0))
+        vol = int(q.get('v', 0))
+
+        # 2. Get Historical for Indicators (5-min candles)
         hist = api.get_time_price_series(exchange="NSE", token=token, interval=5)
-        if hist and isinstance(hist, list) and len(hist) > 10:
-            df = pd.DataFrame(hist)
-            df['intc'] = df['intc'].astype(float)
-            sma = round(df['intc'].tail(10).mean(), 2)
-            pivot = round((high + low + pc) / 3, 2)
-            r1, s1 = round((2 * pivot) - low, 2), round((2 * pivot) - high, 2)
+        if not hist or len(hist) < 30: return None
 
-            # Score Calculation
-            if st.session_state.start_oi == 0: st.session_state.start_oi = toi
-            c_score = sum([(lp > sma), (lp > pc), (toi >= st.session_state.start_oi), (vol > 0)])
-            p_score = sum([(lp < sma), (lp < pc), (toi >= st.session_state.start_oi), (vol > 0)])
+        df = pd.DataFrame(hist)
+        df['intc'] = df['intc'].astype(float)
+        df['v'] = df['v'].astype(float)
 
+        # Indicators
+        sma = df['intc'].rolling(20).mean().iloc[-1]
+        rsi = rsi_calc(df['intc']).iloc[-1]
+        
+        # VWAP Calculation
+        df['vwap'] = (df['intc'] * df['v']).cumsum() / df['v'].cumsum()
+        vwap = df['vwap'].iloc[-1]
+
+        avg_vol = df['v'].tail(10).mean()
+        prev_high = df['intc'].tail(5).max()
+        prev_low = df['intc'].tail(5).min()
+
+        return lp, sma, rsi, vwap, vol, toi, avg_vol, prev_high, prev_low
+    except Exception as e:
+        print(f"Fetch Error: {e}")
+        return None
+
+# ========= EXECUTION =========
+def place_market_order(buy_sell, symbol, qty):
+    """Safety wrapper for API orders"""
+    try:
+        res = api.place_order(buy_or_sell=buy_sell, product_type='I',
+                             exchange='NFO', tradingsymbol=symbol,
+                             quantity=qty, discloseqty=0, price_type='MKT',
+                             remarks='UltraBot_Trade')
+        return res
+    except Exception as e:
+        print(f"Order Failed: {e}")
+        return None
+
+# ========= MAIN LOOP =========
+def main():
+    global locked_entry, trade_type, trade_count, daily_pnl
+    global last_trade_time, prev_oi, prev_price, trail_sl
+
+    # Setup
+    idx = input("1. NIFTY (26000) | 2. BANKNIFTY (26009): ")
+    token = "26000" if idx == "1" else "26009"
+    qty = 50 if idx == "1" else 15 # Standard Lot Sizes
+    
+    totp = input("Enter TOTP: ").strip()
+    login = api.login(userid=USER, password=PWD, twoFA=totp,
+                      vendor_code=VC, api_secret=KEY, imei="abc123")
+
+    if not login or login.get('stat') != 'Ok':
+        print("❌ Login Failed!")
+        return
+
+    print("✅ BOT LIVE - SCANNING FOR SNIPER ENTRIES...")
+
+    while True:
+        now = time.time()
+        
+        # Risk Check
+        if trade_count >= MAX_TRADES or daily_pnl <= MAX_DAILY_LOSS:
+            print("🛑 Trading Stopped: Limits Reached.")
+            break
+
+        data = fetch_data(token)
+        if data:
+            lp, sma, rsi, vwap, vol, toi, avg_vol, prev_high, prev_low = data
+            
+            # Logic Helpers
+            oi_change = toi - prev_oi if prev_oi else 0
+            vol_spike = vol > (avg_vol * 1.5)
+            
             # SIGNAL LOGIC
-            status = "SCANNING 📡"
-            if c_score >= 3 and lp > sma: status = "CALL BUY ✅"
-            elif p_score >= 3 and lp < sma: status = "PUT BUY 🔥"
-            safety = round(((c_score if "CALL" in status else p_score)/4)*100, 1) if "BUY" in status else 0.0
+            signal = "WAIT"
+            if lp > sma and lp > vwap and rsi > 55 and vol_spike and lp > prev_high:
+                signal = "STRONG CALL 🟢"
+            elif lp < sma and lp < vwap and rsi < 45 and vol_spike and lp < prev_low:
+                signal = "STRONG PUT 🔴"
 
-            # --- UI DISPLAY ---
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("LTP", lp)
-            col2.metric("SMA (10)", sma)
-            col3.metric("SAFETY", f"{safety}%")
-            col4.metric("PIVOT", pivot)
+            # Console Refresh
+            os.system("cls" if os.name == "nt" else "clear")
+            print(f"--- SNIPER | {time.strftime('%H:%M:%S')} ---")
+            print(f"LTP: {lp} | RSI: {round(rsi,1)} | VWAP: {round(vwap,1)}")
+            print(f"Signal: {signal} | OI Chg: {oi_change}")
+            print(f"PnL: {round(daily_pnl,2)} | Trades: {trade_count}")
+            print("---------------------------------")
 
-            st.divider()
-            st.subheader(f"SIGNAL: {status}")
+            # ENTRY
+            if signal != "WAIT" and locked_entry == 0 and (now - last_trade_time > COOLDOWN):
+                # NOTE: You need a logic to find the exact ATM Option Symbol here
+                # For this code, we track the Index Price 'lp'
+                locked_entry = lp
+                trade_type = "CALL" if "CALL" in signal else "PUT"
+                trail_sl = lp - 20 if trade_type == "CALL" else lp + 20
+                last_trade_time = now
+                print(f"🚀 VIRTUAL ENTRY: {trade_type} @ {locked_entry}")
 
-            # TRADE HANDLER
-            if safety >= 75.0 and st.session_state.locked_entry == 0:
-                st.session_state.locked_entry = lp
-                st.session_state.trade_type = status
+            # EXIT / TRAILING
+            if locked_entry > 0:
+                if trade_type == "CALL":
+                    pnl = lp - locked_entry
+                    trail_sl = max(trail_sl, lp - 20)
+                    exit_hit = lp <= trail_sl
+                else:
+                    pnl = locked_entry - lp
+                    trail_sl = min(trail_sl, lp + 20)
+                    exit_hit = lp >= trail_sl
 
-            if st.session_state.locked_entry > 0:
-                entry = st.session_state.locked_entry
-                is_call = "CALL" in st.session_state.trade_type
-                pnl = round(lp - entry if is_call else entry - lp, 2)
-                st.info(f"🚀 ACTIVE TRADE | ENTRY: {entry} | P&L: {pnl}")
-                if pnl >= 40 or pnl <= -20:
-                    st.session_state.trade_history.append({"Time": datetime.now().strftime("%H:%M:%S"), "Type": st.session_state.trade_type, "P&L": pnl})
-                    st.session_state.locked_entry = 0
+                print(f"TRADING {trade_type} | PnL: {round(pnl,2)} | T-SL: {round(trail_sl,2)}")
 
-            # HISTORY
-            if st.session_state.trade_history:
-                st.table(pd.DataFrame(st.session_state.trade_history))
+                if pnl >= 60 or exit_hit:
+                    trade_count += 1
+                    daily_pnl += pnl
+                    print(f"📌 EXIT TRIGGERED @ {lp}")
+                    locked_entry = 0
+                    trade_type = None
 
-    # Yahan magic hai: Ye website ko har 2 second mein refresh karega bina loop ke
-    time.sleep(2)
-    st.rerun() 
-else:
-    st.info("Waiting for Login...")
+            prev_oi = toi
+            prev_price = lp
+
+        time.sleep(2)
+
+if __name__ == "__main__":
+    main()
