@@ -23,16 +23,16 @@ api = st.session_state.api_instance
 def get_oi_levels(index_name):
     """Highest OI strikes dhoondhne ke liye function"""
     try:
-        # NIFTY/BANKNIFTY ke liye sahi symbol select karna
-        search_text = "Nifty Bank" if index_name == "BANKNIFTY" else "Nifty 50"
-        # Option chain data fetch logic
-        chain = api.get_option_chain(exchange="NFO", instrument=search_text, expiry="LATEST")
+        # Shoonya API ke liye sahi instrument name
+        search_inst = "Nifty 50" if index_name == "NIFTY" else "Nifty Bank"
+        chain = api.get_option_chain(exchange="NFO", instrument=search_inst, expiry="LATEST")
+        
         if chain and 'values' in chain:
             df_oc = pd.DataFrame(chain['values'])
             # Highest Call OI = Resistance | Highest Put OI = Support
-            res_strike = df_oc.loc[df_oc['ce_oi'].idxmax()]['stk']
-            sup_strike = df_oc.loc[df_oc['pe_oi'].idxmax()]['stk']
-            return float(sup_strike), float(res_strike)
+            res_strike = float(df_oc.loc[df_oc['ce_oi'].idxmax()]['stk'])
+            sup_strike = float(df_oc.loc[df_oc['pe_oi'].idxmax()]['stk'])
+            return sup_strike, res_strike
         return None, None
     except:
         return None, None
@@ -44,8 +44,9 @@ def fetch_data(token, index_name):
         
         lp, pc = float(q['lp']), float(q.get('c', q['lp']))
         toi, vol = int(q.get('toi', 0)), int(q.get('v', 0))
+        high, low = float(q.get('h', lp)), float(q.get('l', lp))
         
-        # OI Based Support & Resistance
+        # OI Data fetch karna
         s1_oi, r1_oi = get_oi_levels(index_name)
         
         hist = api.get_time_price_series(exchange="NSE", token=token, interval=5)
@@ -53,10 +54,15 @@ def fetch_data(token, index_name):
             df = pd.DataFrame(hist)
             df['intc'] = df['intc'].astype(float)
             sma = round(df['intc'].tail(10).mean(), 2)
+            pivot = round((high + low + pc) / 3, 2)
+            
+            # --- BACKUP LOGIC: Agar OI data na mile toh Pivot use karein ---
+            if s1_oi is None: s1_oi = round(pivot - (0.382 * (high - low)), 2)
+            if r1_oi is None: r1_oi = round(pivot + (0.382 * (high - low)), 2)
             
             # Momentum: Current Price vs Previous Candle Price
             price_up = lp > df['intc'].iloc[-2]
-            return lp, pc, sma, toi, vol, s1_oi, r1_oi, price_up
+            return lp, pc, sma, toi, vol, s1_oi, r1_oi, pivot, price_up
         return None
     except: return None
 
@@ -81,15 +87,15 @@ if st.session_state.logged_in:
     while True:
         data = fetch_data(token, idx_choice)
         if data:
-            lp, pc, sma, toi, vol, s1, r1, price_up = data
+            lp, pc, sma, toi, vol, s1, r1, pivot, price_up = data
             if start_oi == 0: start_oi = toi
             
             # --- ADVANCED LOGIC (Price + OI Momentum) ---
             c_trend, c_sent = (lp > sma), (lp > pc)
-            c_mom = (price_up and toi > start_oi) # Bullish momentum
+            c_mom = (price_up and toi > start_oi) 
             
             p_trend, p_sent = (lp < sma), (lp < pc)
-            p_mom = (not price_up and toi > start_oi) # Bearish momentum
+            p_mom = (not price_up and toi > start_oi)
 
             c_score = sum([c_trend, c_sent, c_mom, (vol > 0)])
             p_score = sum([p_trend, p_sent, p_mom, (vol > 0)])
@@ -110,8 +116,8 @@ if st.session_state.logged_in:
                 col4.metric("OI MOMENTUM", "BULLISH 📈" if c_mom else "BEARISH 📉" if p_mom else "NEUTRAL ⚖️")
 
                 st.divider()
-                # OI Based Levels Display
-                st.warning(f"🏦 OI DATA LEVELS | Support: {s1 if s1 else 'Calculating...'} | Resistance: {r1 if r1 else 'Calculating...'}")
+                # Levels Display
+                st.info(f"🎯 LEVELS | Support: {s1} | Resistance: {r1} | Pivot: {pivot}")
                 st.subheader(f"SIGNAL: {status}")
 
                 # --- TRADE EXECUTION ---
@@ -120,10 +126,10 @@ if st.session_state.logged_in:
                     st.session_state.entry_safety = safety
                     st.session_state.trade_type = status
 
-                # --- ACTIVE TRADE DISPLAY (FIXED) ---
+                # --- ACTIVE TRADE DISPLAY ---
                 if st.session_state.locked_entry > 0:
                     entry = st.session_state.locked_entry
-                    e_safety = st.session_state.get('entry_safety', safety)
+                    e_safety = st.session_state.get('entry_safety', 0)
                     pnl = round(lp - entry if "CALL" in st.session_state.trade_type else entry - lp, 2)
                     
                     st.success(f"🚀 ACTIVE TRADE (@{e_safety}%) | ENTRY: {entry}")
