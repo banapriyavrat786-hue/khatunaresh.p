@@ -1,7 +1,4 @@
 streamlit
 pandas
-yfinance
+smartapi-python
 pyotp
-requests
-websocket-client
-NorenRestApiPy
