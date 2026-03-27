@@ -1,104 +1,106 @@
 import streamlit as st
 from SmartApi import SmartConnect
 import pyotp
-import re
 import time
-import requests
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 FIXED_CLIENT_ID = "P51646259"
-LTP_URL = "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/getLtpData"
 
 st.set_page_config(page_title="GRK WARRIOR PRO", layout="wide")
 
-# --- Initializing Vault ---
-if 'jwt' not in st.session_state: st.session_state.jwt = None
-if 'api_key' not in st.session_state: st.session_state.api_key = None
-if 'connected' not in st.session_state: st.session_state.connected = False
+# ==========================================
+# SESSION STATE INIT
+# ==========================================
+if 'connected' not in st.session_state:
+    st.session_state.connected = False
 
-def clean_totp(key):
-    key = re.sub(r'\s+', '', key).upper()
-    key = re.sub(r'[^A-Z2-7]', '', key)
-    padding = len(key) % 8
-    if padding: key += '=' * (8 - padding)
-    return key
+if 'obj' not in st.session_state:
+    st.session_state.obj = None
 
-# --- Sidebar UI ---
+# ==========================================
+# SIDEBAR
+# ==========================================
 st.sidebar.title("🚀 GRK WARRIOR V3")
+
 idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔑 Secure Login")
 
-# 🎯 Use your NEW app key here
 api_key_input = st.sidebar.text_input("1. SmartAPI Key", value="MT72qa1q")
 mpin = st.sidebar.text_input("2. Angel 4-Digit MPIN", type="password", max_chars=4)
-totp_secret = st.sidebar.text_input("3. TOTP Secret Key", type="password", value="W6SCERQJX4RSU6TXECROABI7TA")
+totp_secret = st.sidebar.text_input("3. TOTP Secret Key", type="password")
 
+# ==========================================
+# CONNECT BUTTON
+# ==========================================
 if st.sidebar.button("Connect Bot"):
     try:
-        clean_key = clean_totp(totp_secret)
-        otp = pyotp.TOTP(clean_key).now()
-        
-        # Fresh Login
+        otp = pyotp.TOTP(totp_secret).now()
+
         obj = SmartConnect(api_key=api_key_input.strip())
         data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
-        
+
         if data['status']:
-            st.session_state.jwt = data['data']['jwtToken']
-            st.session_state.api_key = api_key_input.strip()
+            st.session_state.obj = obj
             st.session_state.connected = True
             st.sidebar.success("✅ Live Connection Ready!")
         else:
             st.sidebar.error(f"❌ Login Failed: {data['message']}")
-    except Exception as e:
-        st.sidebar.error(f"Error: {e}")
 
-# --- Main Dashboard ---
+    except Exception as e:
+        st.sidebar.error(f"❌ Error: {e}")
+
+# ==========================================
+# MAIN DASHBOARD
+# ==========================================
 st.title("🚀 MKPV ULTRA SNIPER V3 | LIVE")
 st.divider()
 
 col1, col2, col3 = st.columns(3)
 
+# ==========================================
+# LIVE DATA SECTION
+# ==========================================
 if st.session_state.connected:
+
     try:
+        # SYMBOL SELECT
         t_sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
         t_tok = "26000" if idx == "NIFTY" else "26009"
-        
-        # 🎯 Force Injecting Headers on every refresh
-        headers = {
-            "Authorization": f"Bearer {st.session_state.jwt}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "X-UserType": "USER",
-            "X-SourceID": "WEB",
-            "X-ClientLocalIP": "127.0.0.1",
-            "X-ClientPublicIP": "127.0.0.1",
-            "X-MACAddress": "00:00:00:00:00:00",
-            "X-PrivateKey": st.session_state.api_key
-        }
-        
-        payload = {"exchange": "NSE", "tradingsymbol": t_sym, "symboltoken": t_tok}
-        response = requests.post(LTP_URL, json=payload, headers=headers).json()
-        
-        if response.get('status'):
-            ltp = response['data']['ltp']
+
+        # ✅ LTP FETCH (Correct Way)
+        ltp_data = st.session_state.obj.ltpData(
+            exchange="NSE",
+            tradingsymbol=t_sym,
+            symboltoken=t_tok
+        )
+
+        if ltp_data['status']:
+            ltp = ltp_data['data']['ltp']
+
             col1.metric(f"LTP {idx}", f"₹{ltp}", delta="LIVE")
             col2.metric("Pipeline Status", "Connected ✅")
             col3.metric(f"OI {idx}", "Updating...")
+
         else:
-            # Automatic auto-reconnect logic
+            # Session expired → reset
             st.session_state.connected = False
-            st.warning("Session mismatch! Re-connecting...")
+            st.warning("⚠️ Session expired. Please reconnect.")
             st.rerun()
-            
+
     except Exception as e:
-        st.error(f"Data Fetch Error: {e}")
-        
-    time.sleep(1) # Faster update
+        st.error(f"❌ Data Fetch Error: {e}")
+
+    # 🔁 Auto refresh
+    time.sleep(1)
     st.rerun()
+
+# ==========================================
+# OFFLINE STATE
+# ==========================================
 else:
     col1.metric(f"LTP {idx}", "₹0")
     col2.metric("Pipeline Status", "Offline ❌")
