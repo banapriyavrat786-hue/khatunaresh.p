@@ -7,6 +7,12 @@ import re
 import time
 import threading
 
+# ==========================================
+# 1. FIXED CONFIGURATION (Yahan Details Fix Hain)
+# ==========================================
+FIXED_API_KEY = "W6SCERQJX4RSU6TXECROABI7TA" # Aapke screenshot se li gayi
+FIXED_CLIENT_ID = "P51646259"
+
 # --- Page Config ---
 st.set_page_config(page_title="GRK WARRIOR PRO", layout="wide")
 
@@ -14,14 +20,12 @@ st.set_page_config(page_title="GRK WARRIOR PRO", layout="wide")
 if 'connected' not in st.session_state:
     st.session_state.connected = False
 if 'ltp_data' not in st.session_state:
-    st.session_state.ltp_data = {"NIFTY": 0, "BANKNIFTY": 0}
+    st.session_state.ltp_data = {"NIFTY": 0.0, "BANKNIFTY": 0.0}
 if 'oi_data' not in st.session_state:
     st.session_state.oi_data = {"NIFTY": 0, "BANKNIFTY": 0}
-if 'error_msg' not in st.session_state:
-    st.session_state.error_msg = ""
 
-# --- Helper Functions ---
-def clean_and_fix_key(key):
+# --- Function to Fix TOTP Padding & Spaces ---
+def clean_totp(key):
     key = re.sub(r'\s+', '', key).upper()
     key = re.sub(r'[^A-Z2-7]', '', key)
     missing_padding = len(key) % 8
@@ -32,7 +36,6 @@ def clean_and_fix_key(key):
 # --- WebSocket Setup ---
 def on_data(wsapp, msg):
     token = msg.get('token')
-    # Angel One sends price in paise, so divide by 100
     price = msg.get('last_traded_price', 0) / 100
     oi = msg.get('open_interest', 0)
     
@@ -43,83 +46,71 @@ def on_data(wsapp, msg):
         st.session_state.ltp_data["BANKNIFTY"] = price
         st.session_state.oi_data["BANKNIFTY"] = oi
 
-def start_websocket(jwt, api_key, client_id, feed_token):
+def start_ws(jwt, feed_token):
     try:
-        sws = SmartWebSocketV2(jwt, api_key, client_id, feed_token)
+        sws = SmartWebSocketV2(jwt, FIXED_API_KEY, FIXED_CLIENT_ID, feed_token)
         sws.on_data = on_data
-        def on_open(wsapp):
-            # Subscribe to Nifty (26000) and BankNifty (26009)
-            tokens = [{"exchangeType": 1, "tokens": ["26000", "26009"]}]
-            sws.subscribe("grk_warrior_v3", 3, tokens)
-        
-        sws.on_open = on_open
+        sws.on_open = lambda ws: sws.subscribe("grk_warrior", 3, [{"exchangeType": 1, "tokens": ["26000", "26009"]}])
         sws.connect()
     except Exception as e:
-        st.session_state.error_msg = f"WebSocket Error: {str(e)}"
+        print(f"WebSocket Connection Error: {e}")
 
 # --- Sidebar UI ---
-st.sidebar.title("🔑 Bot Authentication")
+st.sidebar.title("🔑 GRK Bot Login")
+st.sidebar.info(f"Client ID: {FIXED_CLIENT_ID}")
 index_choice = st.sidebar.radio("Select Index", ["NIFTY", "BANKNIFTY"])
 
-# Yahan apni actual API Key bhariye
-api_key_input = st.sidebar.text_input("API Key", placeholder="Enter your Angel Trading API Key")
-client_id = st.sidebar.text_input("Client ID", value="P51646259")
+# Sirf ye do cheezein aapko daalni hongi
 password = st.sidebar.text_input("Angel Password", type="password")
-totp_key_input = st.sidebar.text_input("TOTP Secret Key", type="password")
+totp_secret = st.sidebar.text_input("TOTP Secret Key (Alphanumeric)", type="password")
 
-if st.sidebar.button("Start GRK Warrior"):
-    if not api_key_input or not totp_key_input or not password:
-        st.sidebar.error("Sari details bhariye!")
+if st.sidebar.button("🚀 Start Sniper Bot"):
+    if not password or not totp_secret:
+        st.sidebar.warning("Password aur TOTP Secret dono daalein!")
     else:
         try:
-            # 1. Fix TOTP Key & Generate OTP
-            final_key = clean_and_fix_key(totp_key_input)
-            totp_gen = pyotp.TOTP(final_key)
-            current_otp = totp_gen.now()
+            # 1. Clean and Generate TOTP
+            clean_key = clean_totp(totp_secret)
+            otp = pyotp.TOTP(clean_key).now()
             
-            # 2. Authenticate
-            obj = SmartConnect(api_key=api_key_input)
-            data = obj.generateSession(client_id, password, current_otp)
+            # 2. Login to Angel One
+            obj = SmartConnect(api_key=FIXED_API_KEY)
+            data = obj.generateSession(FIXED_CLIENT_ID, password, otp)
             
             if data['status']:
                 st.session_state.connected = True
-                feed_token = obj.getfeedToken()
+                ft = obj.getfeedToken()
+                jwt = data['data']['jwtToken']
                 
-                # 3. Start WebSocket in Background Thread
-                t = threading.Thread(target=start_websocket, 
-                                     args=(data['data']['jwtToken'], api_key_input, client_id, feed_token))
+                # 3. Start Threaded WebSocket
+                t = threading.Thread(target=start_ws, args=(jwt, ft))
                 t.daemon = True
                 t.start()
                 
-                st.sidebar.success("✅ Bot Connected!")
+                st.sidebar.success("✅ Bot Connected Successfully!")
             else:
                 st.sidebar.error(f"❌ Login Failed: {data['message']}")
         except Exception as e:
-            st.sidebar.error(f"⚠️ Connection Error: {str(e)}")
+            st.sidebar.error(f"⚠️ Error: {str(e)}")
 
 # --- Main Dashboard ---
-st.title("🚀 MKPV ULTRA SNIPER V3 | ANGEL-ONE LIVE")
+st.title("🚀 MKPV ULTRA SNIPER V3 | LIVE")
+st.divider()
 
-if st.session_state.error_msg:
-    st.error(st.session_state.error_msg)
-
-st.subheader("🛠️ Data Pipeline Status")
 col1, col2, col3 = st.columns(3)
 
-# LTP Metric
-current_ltp = st.session_state.ltp_data.get(index_choice, 0)
-ltp_status = "✅" if current_ltp > 0 else "❌"
-col1.metric(label=f"LTP ({index_choice}): {ltp_status}", value=f"₹{current_ltp}")
+# Display Metrics
+l_val = st.session_state.ltp_data[index_choice]
+o_val = st.session_state.oi_data[index_choice]
 
-# History Metric
-col2.metric(label="History: ✅", value="Connected")
+with col1:
+    st.metric(label=f"LTP ({index_choice})", value=f"₹{l_val}", delta="LIVE" if l_val > 0 else None)
+with col2:
+    st.metric(label="Data Pipeline", value="Connected ✅" if st.session_state.connected else "Offline ❌")
+with col3:
+    st.metric(label=f"Open Interest (OI)", value=o_val, delta="Updated" if o_val > 0 else None)
 
-# OI Metric
-current_oi = st.session_state.oi_data.get(index_choice, 0)
-oi_status = "✅" if current_oi > 0 else "❌"
-col3.metric(label=f"OI Data: {oi_status}", value=f"{current_oi}")
-
-# --- Auto Refresh ---
+# --- Auto-Refresh ---
 if st.session_state.connected:
     time.sleep(1)
     st.rerun()
