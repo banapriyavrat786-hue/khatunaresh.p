@@ -14,12 +14,10 @@ LTP_URL = "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1
 st.set_page_config(page_title="GRK WARRIOR PRO", layout="wide")
 
 # --- Session States ---
-if 'jwt_token' not in st.session_state:
-    st.session_state.jwt_token = None
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = None
-if 'connected' not in st.session_state:
-    st.session_state.connected = False
+if 'jwt_token' not in st.session_state: st.session_state.jwt_token = None
+if 'api_key' not in st.session_state: st.session_state.api_key = None
+if 'connected' not in st.session_state: st.session_state.connected = False
+if 'last_price' not in st.session_state: st.session_state.last_price = 0.0
 
 def clean_totp(key):
     key = re.sub(r'\s+', '', key).upper()
@@ -28,40 +26,33 @@ def clean_totp(key):
     if padding: key += '=' * (8 - padding)
     return key
 
-# --- Sidebar UI ---
+# --- Sidebar ---
 st.sidebar.title("🚀 GRK WARRIOR V3")
-idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
+idx = st.sidebar.radio("Select Index", ["NIFTY", "BANKNIFTY"])
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔑 Login Details")
-
-# Note: Use the NEW API Key here (The one with 143.55.89.112 IP)
+# Use the API Key from your 'kunwarpriyavrat' app
 api_key_input = st.sidebar.text_input("1. SmartAPI Key", value="MT72qa1q")
 mpin = st.sidebar.text_input("2. Angel 4-Digit MPIN", type="password", max_chars=4)
 totp_secret = st.sidebar.text_input("3. TOTP Secret Key", type="password", value="W6SCERQJX4RSU6TXECROABI7TA")
 
 if st.sidebar.button("Connect Bot"):
-    if not api_key_input or not totp_secret or not mpin:
-        st.sidebar.error("Details are missing!")
-    else:
-        try:
-            clean_key = clean_totp(totp_secret)
-            otp = pyotp.TOTP(clean_key).now()
-            
-            obj = SmartConnect(api_key=api_key_input.strip())
-            data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
-            
-            if data['status']:
-                st.session_state.jwt_token = data['data']['jwtToken']
-                st.session_state.api_key = api_key_input.strip()
-                st.session_state.connected = True
-                st.sidebar.success("✅ Connected!")
-            else:
-                st.sidebar.error(f"❌ Login Error: {data['message']}")
-        except Exception as e:
-            st.sidebar.error(f"Error: {e}")
+    try:
+        clean_key = clean_totp(totp_secret)
+        otp = pyotp.TOTP(clean_key).now()
+        obj = SmartConnect(api_key=api_key_input.strip())
+        data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
+        
+        if data['status']:
+            st.session_state.jwt_token = data['data']['jwtToken']
+            st.session_state.api_key = api_key_input.strip()
+            st.session_state.connected = True
+            st.sidebar.success("✅ Live Connection Ready!")
+        else:
+            st.sidebar.error(f"❌ Login Failed: {data['message']}")
+    except Exception as e:
+        st.sidebar.error(f"Error: {e}")
 
-# --- Dashboard Layout ---
+# --- Dashboard ---
 st.title("🚀 MKPV ULTRA SNIPER V3 | LIVE (REST)")
 st.divider()
 
@@ -69,10 +60,9 @@ c1, c2, c3 = st.columns(3)
 
 if st.session_state.connected:
     try:
-        trading_symbol = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
-        token = "26000" if idx == "NIFTY" else "26009"
+        t_sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
+        t_tok = "26000" if idx == "NIFTY" else "26009"
         
-        # 🎯 FIX: Manually sending headers to avoid library issues
         headers = {
             "Authorization": f"Bearer {st.session_state.jwt_token}",
             "Content-Type": "application/json",
@@ -85,24 +75,24 @@ if st.session_state.connected:
             "X-PrivateKey": st.session_state.api_key
         }
         
-        payload = {"exchange": "NSE", "tradingsymbol": trading_symbol, "symboltoken": token}
+        payload = {"exchange": "NSE", "tradingsymbol": t_sym, "symboltoken": t_tok}
+        resp = requests.post(LTP_URL, json=payload, headers=headers).json()
         
-        response = requests.post(LTP_URL, json=payload, headers=headers).json()
-        
-        if response.get('status'):
-            price = response['data']['ltp']
-            c1.metric(f"LTP {idx}", f"₹{price}", delta="LIVE Stream")
+        if resp.get('status'):
+            st.session_state.last_price = resp['data']['ltp']
+            c1.metric(f"LTP {idx}", f"₹{st.session_state.last_price}", delta="LIVE Stream")
             c2.metric("Pipeline Status", "Online ✅")
-            c3.metric(f"OI {idx}", "0")
+            c3.metric(f"OI {idx}", "Updating...")
         else:
-            # 💡 Agar "Invalid Token" aaye toh auto-reconnect trigger karein
+            # 💡 Reset connection if token fails
             st.session_state.connected = False
-            st.error(f"Session Expired: {response.get('message')}. Please click 'Connect Bot' again.")
+            st.warning("Session Timeout! Re-connecting automatically...")
+            st.rerun()
             
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Pipeline Error: {e}")
         
-    time.sleep(2)
+    time.sleep(1) # Faster refresh
     st.rerun()
 else:
     c1.metric(f"LTP {idx}", "₹0")
