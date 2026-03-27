@@ -29,7 +29,6 @@ def clean_totp(key):
 st.sidebar.title("🚀 GRK WARRIOR V3")
 idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 
-# NAYA: MPIN ka input box
 mpin = st.sidebar.text_input("Angel 4-Digit MPIN", type="password", max_chars=4)
 totp_secret = st.sidebar.text_input("True TOTP Secret Key", type="password")
 
@@ -42,7 +41,6 @@ if st.sidebar.button("Connect Bot"):
             otp = pyotp.TOTP(clean_key).now()
             
             obj = SmartConnect(api_key=FIXED_API_KEY)
-            # Password ki jagah ab mpin jaa raha hai
             data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
             
             if data['status']:
@@ -62,24 +60,32 @@ c1, c2, c3 = st.columns(3)
 
 if st.session_state.connected:
     try:
-        # Direct Data Fetch
-        token = "26000" if idx == "NIFTY" else "26009"
-        ltp_response = st.session_state.smart_obj.ltpData("NSE", idx, token)
+        # 🎯 FIX: Angel One ke exact trading symbols use kiye hain
+        if idx == "NIFTY":
+            trading_symbol = "Nifty 50"
+            token = "26000"
+        else:
+            trading_symbol = "Nifty Bank"
+            token = "26009"
+            
+        ltp_response = st.session_state.smart_obj.ltpData("NSE", trading_symbol, token)
         
-        if ltp_response['status']:
+        # 🛡️ FIX: Safe dictionary check taaki KeyError na aaye
+        if isinstance(ltp_response, dict) and ltp_response.get('status'):
             live_price = ltp_response['data']['ltp']
             
-            c1.metric(f"LTP {idx}", f"₹{live_price}", delta="LIVE")
+            c1.metric(f"LTP {idx}", f"₹{live_price}", delta="LIVE Stream")
             c2.metric("Pipeline Status", "Online ✅")
-            c3.metric(f"OI {idx}", "0 (Spot Index)")
+            c3.metric(f"OI {idx}", "0", help="Spot Index par OI nahi hota.")
         else:
-            st.error("Data fetch error!")
+            # Agar limit cross hui ya market band hua toh error saaf dikhega
+            st.error(f"Angel API Error: {ltp_response.get('message', 'Unknown Error')}")
             
     except Exception as e:
         st.error(f"Data Fetch Error: {e}")
         
-    # Auto-Refresh loop
-    time.sleep(1.5)
+    # Auto-Refresh loop (2 second ka gap taaki API block na kare)
+    time.sleep(2)
     st.rerun()
 else:
     # Default State
