@@ -31,44 +31,26 @@ idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔑 Login Details")
 
-# 1. API KEY BOX
-api_key_input = st.sidebar.text_input(
-    "1. SmartAPI Key (W6... wali)", 
-    value="W6SCERQJX4RSU6TXECROABI7TA", 
-    help="Ye wo key hai jo Angel One portal par app banane ke baad milti hai."
-)
-
-# 2. MPIN BOX
-mpin = st.sidebar.text_input(
-    "2. Angel 4-Digit MPIN", 
-    type="password", 
-    max_chars=4,
-    help="Wo 4 number jisse aap Angel One app kholte hain."
-)
-
-# 3. TOTP SECRET BOX
-totp_secret = st.sidebar.text_input(
-    "3. TOTP Secret Key (QR code wali)", 
-    type="password", 
-    help="Ye wo lambi alphanumeric key hai (e.g., JBSWY3DP...) jisse 6-digit OTP banta hai. Isme API key mat daalna!"
-)
-
-st.sidebar.markdown("---")
+# Aapki default keys maine fix kar di hain
+api_key_input = st.sidebar.text_input("1. SmartAPI Key", value="MT72qa1q")
+mpin = st.sidebar.text_input("2. Angel 4-Digit MPIN", type="password", max_chars=4)
+totp_secret = st.sidebar.text_input("3. TOTP Secret Key", type="password", value="W6SCERQJX4RSU6TXECROABI7TA")
 
 if st.sidebar.button("Connect Bot"):
     if not api_key_input or not totp_secret or not mpin:
-        st.sidebar.error("Teeno details bharna zaroori hai!")
+        st.sidebar.error("Sari details bharna zaroori hai!")
     else:
         try:
             clean_key = clean_totp(totp_secret)
             otp = pyotp.TOTP(clean_key).now()
             
-            # Using the API Key from the input field
+            # Auth Request
             obj = SmartConnect(api_key=api_key_input.strip())
             data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
             
             if data['status']:
-                st.session_state.smart_obj = obj
+                # 🎯 THE REAL FIX: Save the entire working object, not just tokens
+                st.session_state.smart_obj = obj 
                 st.session_state.connected = True
                 st.sidebar.success("✅ Bot Successfully Live!")
             else:
@@ -77,14 +59,13 @@ if st.sidebar.button("Connect Bot"):
             st.sidebar.error(f"Error during login: {e}")
 
 # --- Dashboard Layout ---
-st.title("🚀 MKPV ULTRA SNIPER V3 | LIVE (REST MODE)")
+st.title("🚀 MKPV ULTRA SNIPER V3 | LIVE (REST)")
 st.divider()
 
 c1, c2, c3 = st.columns(3)
 
 if st.session_state.connected:
     try:
-        # Trading Symbols as per Official Docs
         if idx == "NIFTY":
             trading_symbol = "Nifty 50"
             token = "26000"
@@ -92,6 +73,7 @@ if st.session_state.connected:
             trading_symbol = "Nifty Bank"
             token = "26009"
             
+        # 🎯 FIX: Use the saved object directly
         ltp_response = st.session_state.smart_obj.ltpData("NSE", trading_symbol, token)
         
         if isinstance(ltp_response, dict) and ltp_response.get('status'):
