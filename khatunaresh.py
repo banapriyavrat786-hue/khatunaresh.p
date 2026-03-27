@@ -28,15 +28,36 @@ def clean_totp(key):
 st.sidebar.title("🚀 GRK WARRIOR V3")
 idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 
-# --- Explicit Inputs for Clarity ---
-st.sidebar.markdown("### Authentication")
-api_key_input = st.sidebar.text_input("SmartAPI Key", value="W6SCERQJX4RSU6TXECROABI7TA", help="Starts with W6...")
-mpin = st.sidebar.text_input("Angel 4-Digit MPIN", type="password", max_chars=4)
-totp_secret = st.sidebar.text_input("TOTP Secret Key", type="password", help="The alphanumeric string for generating OTPs")
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔑 Login Details")
+
+# 1. API KEY BOX
+api_key_input = st.sidebar.text_input(
+    "1. SmartAPI Key (W6... wali)", 
+    value="W6SCERQJX4RSU6TXECROABI7TA", 
+    help="Ye wo key hai jo Angel One portal par app banane ke baad milti hai."
+)
+
+# 2. MPIN BOX
+mpin = st.sidebar.text_input(
+    "2. Angel 4-Digit MPIN", 
+    type="password", 
+    max_chars=4,
+    help="Wo 4 number jisse aap Angel One app kholte hain."
+)
+
+# 3. TOTP SECRET BOX
+totp_secret = st.sidebar.text_input(
+    "3. TOTP Secret Key (QR code wali)", 
+    type="password", 
+    help="Ye wo lambi alphanumeric key hai (e.g., JBSWY3DP...) jisse 6-digit OTP banta hai. Isme API key mat daalna!"
+)
+
+st.sidebar.markdown("---")
 
 if st.sidebar.button("Connect Bot"):
     if not api_key_input or not totp_secret or not mpin:
-        st.sidebar.error("API Key, MPIN, and Secret Key are all required!")
+        st.sidebar.error("Teeno details bharna zaroori hai!")
     else:
         try:
             clean_key = clean_totp(totp_secret)
@@ -63,6 +84,7 @@ c1, c2, c3 = st.columns(3)
 
 if st.session_state.connected:
     try:
+        # Trading Symbols as per Official Docs
         if idx == "NIFTY":
             trading_symbol = "Nifty 50"
             token = "26000"
