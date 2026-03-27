@@ -9,7 +9,6 @@ import time
 # ==========================================
 FIXED_API_KEY = "W6SCERQJX4RSU6TXECROABI7TA"
 FIXED_CLIENT_ID = "P51646259"
-FIXED_PASSWORD = "YOUR_ANGEL_PASSWORD" # Yahan password daalein
 
 st.set_page_config(page_title="GRK WARRIOR PRO", layout="wide")
 
@@ -29,21 +28,25 @@ def clean_totp(key):
 # --- Sidebar UI ---
 st.sidebar.title("🚀 GRK WARRIOR V3")
 idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
+
+# NAYA: MPIN ka input box
+mpin = st.sidebar.text_input("Angel 4-Digit MPIN", type="password", max_chars=4)
 totp_secret = st.sidebar.text_input("True TOTP Secret Key", type="password")
 
 if st.sidebar.button("Connect Bot"):
-    if not totp_secret:
-        st.sidebar.error("Secret Key zaroori hai!")
+    if not totp_secret or not mpin:
+        st.sidebar.error("MPIN aur Secret Key dono zaroori hain!")
     else:
         try:
             clean_key = clean_totp(totp_secret)
             otp = pyotp.TOTP(clean_key).now()
             
             obj = SmartConnect(api_key=FIXED_API_KEY)
-            data = obj.generateSession(FIXED_CLIENT_ID, FIXED_PASSWORD, otp)
+            # Password ki jagah ab mpin jaa raha hai
+            data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
             
             if data['status']:
-                st.session_state.smart_obj = obj  # Object save kar liya
+                st.session_state.smart_obj = obj
                 st.session_state.connected = True
                 st.sidebar.success("✅ Bot Successfully Live!")
             else:
@@ -59,7 +62,7 @@ c1, c2, c3 = st.columns(3)
 
 if st.session_state.connected:
     try:
-        # Direct Data Fetch (Bina WebSocket ke)
+        # Direct Data Fetch
         token = "26000" if idx == "NIFTY" else "26009"
         ltp_response = st.session_state.smart_obj.ltpData("NSE", idx, token)
         
@@ -68,7 +71,7 @@ if st.session_state.connected:
             
             c1.metric(f"LTP {idx}", f"₹{live_price}", delta="LIVE")
             c2.metric("Pipeline Status", "Online ✅")
-            c3.metric(f"OI {idx}", "0 (Spot Index)", help="Spot Index mein OI nahi hota. F&O mein hota hai.")
+            c3.metric(f"OI {idx}", "0 (Spot Index)")
         else:
             st.error("Data fetch error!")
             
