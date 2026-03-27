@@ -17,22 +17,22 @@ if 'ltp_data' not in st.session_state:
     st.session_state.ltp_data = {"NIFTY": 0, "BANKNIFTY": 0}
 if 'oi_data' not in st.session_state:
     st.session_state.oi_data = {"NIFTY": 0, "BANKNIFTY": 0}
+if 'error_msg' not in st.session_state:
+    st.session_state.error_msg = ""
 
-# --- Function to Fix TOTP Padding ---
+# --- Helper Functions ---
 def clean_and_fix_key(key):
-    # Spaces hatayein aur uppercase karein
     key = re.sub(r'\s+', '', key).upper()
-    # Sirf A-Z aur 2-7 characters rakhein
     key = re.sub(r'[^A-Z2-7]', '', key)
-    # Padding fix karein (Must be multiple of 8)
     missing_padding = len(key) % 8
     if missing_padding:
         key += '=' * (8 - missing_padding)
     return key
 
-# --- WebSocket Callbacks ---
+# --- WebSocket Setup ---
 def on_data(wsapp, msg):
     token = msg.get('token')
+    # Angel One sends price in paise, so divide by 100
     price = msg.get('last_traded_price', 0) / 100
     oi = msg.get('open_interest', 0)
     
@@ -47,67 +47,79 @@ def start_websocket(jwt, api_key, client_id, feed_token):
     try:
         sws = SmartWebSocketV2(jwt, api_key, client_id, feed_token)
         sws.on_data = on_data
-        sws.on_open = lambda ws: sws.subscribe("grk_warrior", 3, [{"exchangeType": 1, "tokens": ["26000", "26009"]}])
+        def on_open(wsapp):
+            # Subscribe to Nifty (26000) and BankNifty (26009)
+            tokens = [{"exchangeType": 1, "tokens": ["26000", "26009"]}]
+            sws.subscribe("grk_warrior_v3", 3, tokens)
+        
+        sws.on_open = on_open
         sws.connect()
     except Exception as e:
-        print(f"WS Error: {e}")
+        st.session_state.error_msg = f"WebSocket Error: {str(e)}"
 
 # --- Sidebar UI ---
 st.sidebar.title("🔑 Bot Authentication")
 index_choice = st.sidebar.radio("Select Index", ["NIFTY", "BANKNIFTY"])
-api_key = st.sidebar.text_input("API Key", value="YOUR_API_KEY") # Apni Key Daalein
+
+# Yahan apni actual API Key bhariye
+api_key_input = st.sidebar.text_input("API Key", placeholder="Enter your Angel Trading API Key")
 client_id = st.sidebar.text_input("Client ID", value="P51646259")
 password = st.sidebar.text_input("Angel Password", type="password")
 totp_key_input = st.sidebar.text_input("TOTP Secret Key", type="password")
 
 if st.sidebar.button("Start GRK Warrior"):
-    if not totp_key_input:
-        st.sidebar.error("TOTP Key is missing!")
+    if not api_key_input or not totp_key_input or not password:
+        st.sidebar.error("Sari details bhariye!")
     else:
         try:
-            # Padding Fix Apply Karein
+            # 1. Fix TOTP Key & Generate OTP
             final_key = clean_and_fix_key(totp_key_input)
             totp_gen = pyotp.TOTP(final_key)
             current_otp = totp_gen.now()
             
-            obj = SmartConnect(api_key=api_key)
+            # 2. Authenticate
+            obj = SmartConnect(api_key=api_key_input)
             data = obj.generateSession(client_id, password, current_otp)
             
             if data['status']:
                 st.session_state.connected = True
                 feed_token = obj.getfeedToken()
                 
-                # WebSocket ko alag thread mein chalayein
-                t = threading.Thread(target=start_websocket, args=(data['data']['jwtToken'], api_key, client_id, feed_token))
+                # 3. Start WebSocket in Background Thread
+                t = threading.Thread(target=start_websocket, 
+                                     args=(data['data']['jwtToken'], api_key_input, client_id, feed_token))
                 t.daemon = True
                 t.start()
                 
-                st.sidebar.success("✅ Bot Connected Successfully!")
+                st.sidebar.success("✅ Bot Connected!")
             else:
                 st.sidebar.error(f"❌ Login Failed: {data['message']}")
         except Exception as e:
-            st.sidebar.error(f"⚠️ Logic Error: {str(e)}")
+            st.sidebar.error(f"⚠️ Connection Error: {str(e)}")
 
 # --- Main Dashboard ---
 st.title("🚀 MKPV ULTRA SNIPER V3 | ANGEL-ONE LIVE")
-st.subheader("🛠️ Data Pipeline Status")
 
+if st.session_state.error_msg:
+    st.error(st.session_state.error_msg)
+
+st.subheader("🛠️ Data Pipeline Status")
 col1, col2, col3 = st.columns(3)
 
-with col1:
-    val = st.session_state.ltp_data.get(index_choice, 0)
-    status = "✅" if val > 0 else "❌"
-    st.metric(label=f"LTP: {status}", value=f"₹{val}")
+# LTP Metric
+current_ltp = st.session_state.ltp_data.get(index_choice, 0)
+ltp_status = "✅" if current_ltp > 0 else "❌"
+col1.metric(label=f"LTP ({index_choice}): {ltp_status}", value=f"₹{current_ltp}")
 
-with col2:
-    st.metric(label="History: ✅", value="Connected")
+# History Metric
+col2.metric(label="History: ✅", value="Connected")
 
-with col3:
-    oi_val = st.session_state.oi_data.get(index_choice, 0)
-    status_oi = "✅" if oi_val > 0 else "❌"
-    st.metric(label=f"OI Data: {status_oi}", value=oi_val)
+# OI Metric
+current_oi = st.session_state.oi_data.get(index_choice, 0)
+oi_status = "✅" if current_oi > 0 else "❌"
+col3.metric(label=f"OI Data: {oi_status}", value=f"{current_oi}")
 
-# Auto Refresh logic
+# --- Auto Refresh ---
 if st.session_state.connected:
     time.sleep(1)
     st.rerun()
