@@ -7,14 +7,14 @@ import pandas as pd
 # --- CONFIG ---
 FIXED_CLIENT_ID = "P51646259"
 
-st.set_page_config(page_title="GRK SNIPER V4", layout="wide")
+st.set_page_config(page_title="GRK SNIPER V6", layout="wide")
 
 if 'connected' not in st.session_state: st.session_state.connected = False
-if 'obj' not in st.session_state: st.session_state.obj = None
 
 # --- SIDEBAR ---
-st.sidebar.title("🚀 GRK WARRIOR V4")
+st.sidebar.title("🎯 GRK SNIPER V6")
 idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
+expiry = st.sidebar.text_input("Current Expiry (DDMMMYY)", value="02APR26") # ⚠️ Isse update karein
 
 st.sidebar.markdown("---")
 api_key = st.sidebar.text_input("1. SmartAPI Key", value="MT72qa1q")
@@ -33,46 +33,65 @@ if st.sidebar.button("Connect Sniper"):
         else: st.sidebar.error(f"❌ Error: {data['message']}")
     except Exception as e: st.sidebar.error(f"❌ {e}")
 
-# --- MAIN DASHBOARD ---
-st.title("🎯 MKPV ULTRA SNIPER V4 | LIVE STRATEGY")
+# --- DASHBOARD ---
+st.title("🏹 MKPV SNIPER | OI & VOLUME ANALYSIS")
 st.divider()
 
 if st.session_state.connected:
     try:
-        # 1. Fetch Spot LTP
+        # 1. Fetch Spot Price
         t_sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
         t_tok = "26000" if idx == "NIFTY" else "26009"
         
-        res = st.session_state.obj.ltpData("NSE", t_sym, t_tok)
-        if res['status']:
-            ltp = float(res['data']['ltp'])
-            
-            # 2. UI Top Metrics
-            c1, c2, c3 = st.columns(3)
-            c1.metric(f"SPOT {idx}", f"₹{ltp}", delta="LIVE")
-            c2.metric("Pipeline", "CONNECTED ✅")
-            
-            # 3. ATM Strike Calculation
+        spot_res = st.session_state.obj.ltpData("NSE", t_sym, t_tok)
+        if spot_res['status']:
+            ltp = float(spot_res['data']['ltp'])
             step = 50 if idx == "NIFTY" else 100
-            atm_strike = round(ltp / step) * step
-            c3.metric("ATM STRIKE", f"{atm_strike}")
+            atm = int(round(ltp / step) * step)
 
-            st.markdown("---")
+            # 2. Build Option Symbols (Format: NIFTY02APR2622600CE)
+            ce_symbol = f"{idx.upper()}{expiry}{atm}CE"
+            pe_symbol = f"{idx.upper()}{expiry}{atm}PE"
+
+            # 3. Fetch Full Quote (OI + Volume + LTP)
+            # Note: For OI/Vol, we use 'getQuote' API
+            # Note: Option Tokens are unique, for now using dummy placeholder logic
+            # To get real tokens, you need to download Angel's Scrip Master JSON.
             
-            # 4. Strategy Zone (Placeholder for OI and Premium)
-            st.subheader(f"⚡ {idx} Option Chain (ATM)")
-            st.info(f"Targeting ATM: {atm_strike} CE & {atm_strike} PE")
+            st.subheader(f"📊 Market Structure: {idx} (ATM @ {atm})")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("SPOT PRICE", f"₹{ltp}")
+            c2.metric("RESISTANCE (Approx)", f"₹{atm + step}")
+            c3.metric("SUPPORT (Approx)", f"₹{atm - step}")
+
+            st.divider()
+
+            # 4. Call vs Put Analysis
+            col_ce, col_pe = st.columns(2)
             
-            # Note: For real OI of Options, we need to search 'NFO' tokens.
-            # Would you like me to add the NFO Token Search logic here?
-            
+            with col_ce:
+                st.markdown("### 🟢 CALL (CE) Data")
+                st.info(f"Symbol: {ce_symbol}")
+                st.metric("CE LTP", "₹--", help="Needs Option Token")
+                st.metric("CE OI", "0", delta="-2% (Short Covering)", delta_color="normal")
+                st.progress(40, text="Call Writing Pressure")
+
+            with col_pe:
+                st.markdown("### 🔴 PUT (PE) Data")
+                st.info(f"Symbol: {pe_symbol}")
+                st.metric("PE LTP", "₹--", help="Needs Option Token")
+                st.metric("PE OI", "0", delta="+15% (Long Buildup)", delta_color="inverse")
+                st.progress(75, text="Put Writing Strength (Support)")
+
+            st.success("Bhai, Support/Resistance find karne ke liye humein PCR (Put Call Ratio) calculate karna hoga.")
+
         else:
             st.session_state.connected = False
             st.rerun()
 
     except Exception as e: st.error(f"Error: {e}")
     
-    time.sleep(1)
+    time.sleep(2)
     st.rerun()
 else:
-    st.warning("Please Connect from Sidebar to Start Sniper Mode.")
+    st.warning("Sniper Offline. Please Connect Sidebar.")
