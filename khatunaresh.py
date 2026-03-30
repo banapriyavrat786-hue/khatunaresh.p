@@ -10,10 +10,10 @@ import pandas as pd
 # ==========================================
 FIXED_CLIENT_ID = "P51646259"
 
-st.set_page_config(page_title="GRK SNIPER PRO", layout="wide")
+st.set_page_config(page_title="GRK SNIPER PRO MAX", layout="wide")
 
 # ==========================================
-# SESSION
+# SESSION STATE
 # ==========================================
 if 'obj' not in st.session_state:
     st.session_state.obj = None
@@ -25,124 +25,166 @@ if 'df' not in st.session_state:
     st.session_state.df = None
 
 # ==========================================
-# LOAD TOKEN MASTER
+# SAFE TOKEN LOAD
 # ==========================================
 def load_tokens():
     url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-    data = requests.get(url).json()
-    return pd.DataFrame(data)
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code != 200:
+            return None
+        return pd.DataFrame(res.json())
+    except:
+        return None
 
 # ==========================================
 # SIDEBAR
 # ==========================================
-st.sidebar.title("🚀 GRK SNIPER PRO")
+st.sidebar.title("🚀 GRK SNIPER PRO MAX")
 
 idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
-expiry = st.sidebar.text_input("Expiry", "02APR2026")
+expiry = st.sidebar.text_input("Expiry (DDMMMYYYY)", "02APR2026")
 
 api_key = st.sidebar.text_input("API Key")
 mpin = st.sidebar.text_input("MPIN", type="password")
 totp = st.sidebar.text_input("TOTP Secret", type="password")
 
+# ==========================================
+# START BOT
+# ==========================================
 if st.sidebar.button("Start Bot"):
 
-    st.session_state.df = load_tokens()
+    df = load_tokens()
+    if df is None:
+        st.sidebar.error("❌ Token load failed")
+        st.stop()
 
-    otp = pyotp.TOTP(totp).now()
-    obj = SmartConnect(api_key)
-    data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
+    st.session_state.df = df
 
-    if data['status']:
-        st.session_state.obj = obj
-        st.session_state.connected = True
-        st.sidebar.success("✅ Connected")
+    try:
+        otp = pyotp.TOTP(totp).now()
+        obj = SmartConnect(api_key)
+        data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
+
+        if data['status']:
+            st.session_state.obj = obj
+            st.session_state.connected = True
+            st.sidebar.success("✅ Connected")
+        else:
+            st.sidebar.error("❌ Login Failed")
+
+    except Exception as e:
+        st.sidebar.error(f"❌ Login Error: {e}")
 
 # ==========================================
-# MAIN
+# MAIN UI
 # ==========================================
 st.title("🚀 MKPV SNIPER PRO MAX")
+st.divider()
 
+col1, col2, col3 = st.columns(3)
+
+# ==========================================
+# LIVE LOGIC
+# ==========================================
 if st.session_state.connected:
 
     obj = st.session_state.obj
     df = st.session_state.df
 
-    # INDEX
-    sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
-    tok = "26000" if idx == "NIFTY" else "26009"
+    try:
+        # INDEX DATA
+        sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
+        tok = "26000" if idx == "NIFTY" else "26009"
 
-    ltp = obj.ltpData("NSE", sym, tok)['data']['ltp']
-    atm = round(ltp / 50) * 50
+        ltp_res = obj.ltpData("NSE", sym, tok)
 
-    st.metric("SPOT", ltp)
-    st.metric("ATM", atm)
+        if not ltp_res['status']:
+            st.error("❌ Session expired. Restart bot.")
+            st.session_state.connected = False
+            st.stop()
 
-    # ==========================================
-    # SYMBOL FIX
-    # ==========================================
-    expiry_short = expiry[:-4] + expiry[-2:]
-    base = f"NIFTY{expiry_short}"
+        spot = ltp_res['data']['ltp']
+        atm = round(spot / 50) * 50
 
-    ce_df = df[df['symbol'].str.contains(base + str(atm) + "CE", na=False)]
-    pe_df = df[df['symbol'].str.contains(base + str(atm) + "PE", na=False)]
+        col1.metric("SPOT", f"₹{spot}")
+        col2.metric("ATM", atm)
+        col3.metric("STATUS", "STABLE ✅")
 
-    if ce_df.empty or pe_df.empty:
-        st.error("❌ Symbol not found")
-        st.stop()
+        st.markdown("### 📊 ATM Option Chain")
 
-    ce = ce_df.iloc[0]
-    pe = pe_df.iloc[0]
+        # ==========================================
+        # FIX EXPIRY FORMAT
+        # ==========================================
+        expiry_short = expiry[:-4] + expiry[-2:]
+        base = f"NIFTY{expiry_short}{atm}"
 
-    # ==========================================
-    # FETCH DATA
-    # ==========================================
-    ce_data = obj.ltpData("NFO", ce['symbol'], ce['token'])
-    pe_data = obj.ltpData("NFO", pe['symbol'], pe['token'])
+        ce_row = df[df['symbol'].str.contains(base + "CE", na=False)]
+        pe_row = df[df['symbol'].str.contains(base + "PE", na=False)]
 
-    ce_ltp = ce_data['data']['ltp']
-    pe_ltp = pe_data['data']['ltp']
+        if ce_row.empty or pe_row.empty:
+            st.warning("⚠️ Symbols not found. Check expiry format.")
+            st.stop()
 
-    # Fake OI (Angel free API me OI direct nahi milta reliably)
-    ce_oi = ce_data['data'].get('openInterest', 0)
-    pe_oi = pe_data['data'].get('openInterest', 0)
+        ce = ce_row.iloc[0]
+        pe = pe_row.iloc[0]
 
-    # ==========================================
-    # ANALYSIS
-    # ==========================================
-    total_oi = ce_oi + pe_oi + 1
-    pcr = pe_oi / total_oi
+        # ==========================================
+        # FETCH CE/PE
+        # ==========================================
+        ce_data = obj.ltpData("NFO", ce['symbol'], ce['token'])
+        pe_data = obj.ltpData("NFO", pe['symbol'], pe['token'])
 
-    strength = round((pe_oi / total_oi) * 100)
+        ce_ltp = ce_data['data']['ltp'] if ce_data['status'] else 0
+        pe_ltp = pe_data['data']['ltp'] if pe_data['status'] else 0
 
-    if pcr > 1:
-        signal = "📈 BUY CALL"
-    elif pcr < 0.7:
-        signal = "📉 BUY PUT"
-    else:
-        signal = "⚖️ WAIT"
+        # ==========================================
+        # ANALYSIS
+        # ==========================================
+        ce_oi = ce_data['data'].get('openInterest', 0) if ce_data['status'] else 0
+        pe_oi = pe_data['data'].get('openInterest', 0) if pe_data['status'] else 0
 
-    support = atm if pe_oi > ce_oi else atm - 50
-    resistance = atm if ce_oi > pe_oi else atm + 50
+        total = ce_oi + pe_oi + 1
+        pcr = round(pe_oi / total, 2)
+        strength = int((pe_oi / total) * 100)
 
-    # ==========================================
-    # UI
-    # ==========================================
-    col1, col2 = st.columns(2)
+        support = atm if pe_oi > ce_oi else atm - 50
+        resistance = atm if ce_oi > pe_oi else atm + 50
 
-    col1.metric("CALL LTP", ce_ltp)
-    col2.metric("PUT LTP", pe_ltp)
+        if pcr > 1:
+            signal = "📈 BUY CALL"
+        elif pcr < 0.7:
+            signal = "📉 BUY PUT"
+        else:
+            signal = "⚖️ WAIT"
 
-    st.markdown("### 📊 Analysis")
+        # ==========================================
+        # UI DISPLAY
+        # ==========================================
+        colA, colB = st.columns(2)
 
-    st.write(f"PCR: {round(pcr,2)}")
-    st.write(f"Strength: {strength}%")
-    st.write(f"Support: {support}")
-    st.write(f"Resistance: {resistance}")
+        colA.metric("CALL LTP", f"₹{ce_ltp}")
+        colB.metric("PUT LTP", f"₹{pe_ltp}")
 
-    st.markdown(f"## ⚡ SIGNAL: {signal}")
+        st.markdown("### 📊 Analysis")
 
-    # ==========================================
-    # AUTO REFRESH
-    # ==========================================
+        st.write(f"PCR: {pcr}")
+        st.write(f"Strength: {strength}%")
+        st.write(f"Support: {support}")
+        st.write(f"Resistance: {resistance}")
+
+        st.markdown(f"## ⚡ SIGNAL: {signal}")
+
+    except Exception as e:
+        st.error(f"❌ Runtime Error: {e}")
+
     time.sleep(1)
     st.rerun()
+
+# ==========================================
+# OFFLINE
+# ==========================================
+else:
+    col1.metric("SPOT", "₹0")
+    col2.metric("ATM", "0")
+    col3.metric("STATUS", "OFFLINE ❌")
