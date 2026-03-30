@@ -2,106 +2,77 @@ import streamlit as st
 from SmartApi import SmartConnect
 import pyotp
 import time
+import pandas as pd
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
+# --- CONFIG ---
 FIXED_CLIENT_ID = "P51646259"
 
-st.set_page_config(page_title="GRK WARRIOR PRO", layout="wide")
+st.set_page_config(page_title="GRK SNIPER V4", layout="wide")
 
-# ==========================================
-# SESSION STATE INIT
-# ==========================================
-if 'connected' not in st.session_state:
-    st.session_state.connected = False
+if 'connected' not in st.session_state: st.session_state.connected = False
+if 'obj' not in st.session_state: st.session_state.obj = None
 
-if 'obj' not in st.session_state:
-    st.session_state.obj = None
-
-# ==========================================
-# SIDEBAR
-# ==========================================
-st.sidebar.title("🚀 GRK WARRIOR V3")
-
+# --- SIDEBAR ---
+st.sidebar.title("🚀 GRK WARRIOR V4")
 idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🔑 Secure Login")
+api_key = st.sidebar.text_input("1. SmartAPI Key", value="MT72qa1q")
+mpin = st.sidebar.text_input("2. MPIN", type="password", max_chars=4)
+totp_key = st.sidebar.text_input("3. TOTP Secret", value="W6SCERQJX4RSU6TXECROABI7TA", type="password")
 
-api_key_input = st.sidebar.text_input("1. SmartAPI Key", value="MT72qa1q")
-mpin = st.sidebar.text_input("2. Angel 4-Digit MPIN", type="password", max_chars=4)
-totp_secret = st.sidebar.text_input("3. TOTP Secret Key", type="password")
-
-# ==========================================
-# CONNECT BUTTON
-# ==========================================
-if st.sidebar.button("Connect Bot"):
+if st.sidebar.button("Connect Sniper"):
     try:
-        otp = pyotp.TOTP(totp_secret).now()
-
-        obj = SmartConnect(api_key=api_key_input.strip())
+        otp = pyotp.TOTP(totp_key.strip().replace(" ", "")).now()
+        obj = SmartConnect(api_key=api_key.strip())
         data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
-
         if data['status']:
             st.session_state.obj = obj
             st.session_state.connected = True
-            st.sidebar.success("✅ Live Connection Ready!")
-        else:
-            st.sidebar.error(f"❌ Login Failed: {data['message']}")
+            st.sidebar.success("✅ Sniper Ready!")
+        else: st.sidebar.error(f"❌ Error: {data['message']}")
+    except Exception as e: st.sidebar.error(f"❌ {e}")
 
-    except Exception as e:
-        st.sidebar.error(f"❌ Error: {e}")
-
-# ==========================================
-# MAIN DASHBOARD
-# ==========================================
-st.title("🚀 MKPV ULTRA SNIPER V3 | LIVE")
+# --- MAIN DASHBOARD ---
+st.title("🎯 MKPV ULTRA SNIPER V4 | LIVE STRATEGY")
 st.divider()
 
-col1, col2, col3 = st.columns(3)
-
-# ==========================================
-# LIVE DATA SECTION
-# ==========================================
 if st.session_state.connected:
-
     try:
-        # SYMBOL SELECT
+        # 1. Fetch Spot LTP
         t_sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
         t_tok = "26000" if idx == "NIFTY" else "26009"
+        
+        res = st.session_state.obj.ltpData("NSE", t_sym, t_tok)
+        if res['status']:
+            ltp = float(res['data']['ltp'])
+            
+            # 2. UI Top Metrics
+            c1, c2, c3 = st.columns(3)
+            c1.metric(f"SPOT {idx}", f"₹{ltp}", delta="LIVE")
+            c2.metric("Pipeline", "CONNECTED ✅")
+            
+            # 3. ATM Strike Calculation
+            step = 50 if idx == "NIFTY" else 100
+            atm_strike = round(ltp / step) * step
+            c3.metric("ATM STRIKE", f"{atm_strike}")
 
-        # ✅ LTP FETCH (Correct Way)
-        ltp_data = st.session_state.obj.ltpData(
-            exchange="NSE",
-            tradingsymbol=t_sym,
-            symboltoken=t_tok
-        )
-
-        if ltp_data['status']:
-            ltp = ltp_data['data']['ltp']
-
-            col1.metric(f"LTP {idx}", f"₹{ltp}", delta="LIVE")
-            col2.metric("Pipeline Status", "Connected ✅")
-            col3.metric(f"OI {idx}", "Updating...")
-
+            st.markdown("---")
+            
+            # 4. Strategy Zone (Placeholder for OI and Premium)
+            st.subheader(f"⚡ {idx} Option Chain (ATM)")
+            st.info(f"Targeting ATM: {atm_strike} CE & {atm_strike} PE")
+            
+            # Note: For real OI of Options, we need to search 'NFO' tokens.
+            # Would you like me to add the NFO Token Search logic here?
+            
         else:
-            # Session expired → reset
             st.session_state.connected = False
-            st.warning("⚠️ Session expired. Please reconnect.")
             st.rerun()
 
-    except Exception as e:
-        st.error(f"❌ Data Fetch Error: {e}")
-
-    # 🔁 Auto refresh
+    except Exception as e: st.error(f"Error: {e}")
+    
     time.sleep(1)
     st.rerun()
-
-# ==========================================
-# OFFLINE STATE
-# ==========================================
 else:
-    col1.metric(f"LTP {idx}", "₹0")
-    col2.metric("Pipeline Status", "Offline ❌")
-    col3.metric(f"OI {idx}", "0")
+    st.warning("Please Connect from Sidebar to Start Sniper Mode.")
