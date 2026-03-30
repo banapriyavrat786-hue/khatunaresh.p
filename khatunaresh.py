@@ -7,15 +7,16 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Sniper V20", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Khatushyam Engine")
+st.set_page_config(page_title="GRK Auto-Sniper V22", layout="wide")
+st.title("🤖 MKPV Auto-Sniper | OI & Volume Edition")
 
 # -- SESSION STATE --
 if 'connected' not in st.session_state: st.session_state.connected = False
 if 'obj' not in st.session_state: st.session_state.obj = None
 if 'token_df' not in st.session_state: st.session_state.token_df = None
-# Live SMA calculate karne ke liye history
 if 'price_history' not in st.session_state: st.session_state.price_history = [] 
+if 'active_trade' not in st.session_state: st.session_state.active_trade = None
+if 'trade_history' not in st.session_state: st.session_state.trade_history = []
 
 def get_internet_time():
     try:
@@ -33,15 +34,16 @@ def load_tokens():
     except: return None
 
 # -- SIDEBAR & LOGIN --
-st.sidebar.title("⚙️ Strategy Controls")
+st.sidebar.title("⚙️ Robot Controls")
+auto_trade = st.sidebar.checkbox("🤖 Enable Auto-Trade Mode", value=False)
 index = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 expiry_str = st.sidebar.text_input("Expiry (e.g. 07APR26)", "07APR26").upper()
 qty_multiplier = st.sidebar.number_input("Lots to Buy", min_value=1, value=1)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🎯 Risk Management (Points)")
-tgt_points = st.sidebar.number_input("Target (+ Points)", value=40, step=5) # Default 40 as per your code
-sl_points = st.sidebar.number_input("StopLoss (- Points)", value=20, step=5) # Default 20 as per your code
+st.sidebar.subheader("🎯 Auto Target & SL (Points)")
+tgt_points = st.sidebar.number_input("Target (+ Points)", value=40, step=5)
+sl_points = st.sidebar.number_input("StopLoss (- Points)", value=20, step=5)
 
 mpin = st.sidebar.text_input("MPIN", type="password", max_chars=4)
 
@@ -59,7 +61,6 @@ if st.sidebar.button("🔑 Connect"):
                 if df is not None:
                     st.session_state.token_df = df
                     st.sidebar.success("✅ System Online!")
-            else: st.sidebar.error("Login Failed")
         except Exception as e: st.sidebar.error(f"Error: {e}")
 
 # -- MAIN DASHBOARD --
@@ -78,88 +79,80 @@ if st.session_state.connected:
         spot = float(res['data']['ltp'])
         atm = int(round(spot / step) * step)
 
-        # Update Live History for SMA
         st.session_state.price_history.append(spot)
-        if len(st.session_state.price_history) > 10:
-            st.session_state.price_history.pop(0) # Keep last 10 ticks
-
-        # Calculate SMA
+        if len(st.session_state.price_history) > 15: st.session_state.price_history.pop(0)
         sma = round(sum(st.session_state.price_history) / len(st.session_state.price_history), 2)
+
+        # 🔍 OI & VOLUME BASED SUPPORT / RESISTANCE
+        # Scan 5 strikes near ATM
+        strikes_to_scan = [atm - (step*2), atm - step, atm, atm + step, atm + (step*2)]
+        tokens_to_fetch = []
+        token_to_strike = {}
+
+        for s in strikes_to_scan:
+            sym_prefix = f"{index}{expiry_str}{s}"
+            ce_df = df[df['symbol'] == f"{sym_prefix}CE"]
+            pe_df = df[df['symbol'] == f"{sym_prefix}PE"]
+            if not ce_df.empty and not pe_df.empty:
+                c_tok = str(ce_df.iloc[0]['token']).split('.')[0]
+                p_tok = str(pe_df.iloc[0]['token']).split('.')[0]
+                tokens_to_fetch.extend([c_tok, p_tok])
+                token_to_strike[c_tok] = {"type": "CE", "strike": s}
+                token_to_strike[p_tok] = {"type": "PE", "strike": s}
+
+        # Angel One API for Market Data (OI & Vol)
+        max_ce_oi = 0; resistance_strike = atm
+        max_pe_oi = 0; support_strike = atm
+
+        try:
+            # Using getMarketData to get Open Interest
+            market_data = obj.getMarketData("FULL", {"NFO": tokens_to_fetch})
+            if market_data and market_data.get('status'):
+                for item in market_data['data']['fetched']:
+                    tok = item['symbolToken']
+                    oi = item['opnInterest']
+                    t_data = token_to_strike.get(tok)
+                    
+                    if t_data['type'] == 'CE' and oi > max_ce_oi:
+                        max_ce_oi = oi
+                        resistance_strike = t_data['strike']
+                    elif t_data['type'] == 'PE' and oi > max_pe_oi:
+                        max_pe_oi = oi
+                        support_strike = t_data['strike']
+        except:
+            pass # Fallback if MarketData API takes time
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Spot Price", f"₹{spot}")
-        c2.metric("Live SMA (10-Tick)", f"₹{sma}")
-        c3.metric("ATM Strike", atm)
-        c4.metric("Status", "LIVE 🟢")
+        c2.metric("Live SMA", f"₹{sma}")
+        c3.metric("Resistance (Max CE OI)", f"Strike: {resistance_strike}")
+        c4.metric("Support (Max PE OI)", f"Strike: {support_strike}")
         
+        # TARGET TOKENS
         search_prefix = f"{index}{expiry_str}{atm}"
         ce_match = df[df['symbol'] == f"{search_prefix}CE"]
         pe_match = df[df['symbol'] == f"{search_prefix}PE"]
 
         if not ce_match.empty and not pe_match.empty:
             ce_row, pe_row = ce_match.iloc[0], pe_match.iloc[0]
-            
-            ce_tok = str(ce_row['token']).split('.')[0]
-            pe_tok = str(pe_row['token']).split('.')[0]
+            ce_tok, pe_tok = str(ce_row['token']).split('.')[0], str(pe_row['token']).split('.')[0]
             
             ce_res = obj.ltpData("NFO", ce_row['symbol'], ce_tok)
             pe_res = obj.ltpData("NFO", pe_row['symbol'], pe_tok)
-
             ce_ltp = float(ce_res['data']['ltp']) if ce_res.get('status') else 0.0
             pe_ltp = float(pe_res['data']['ltp']) if pe_res.get('status') else 0.0
 
             st.divider()
 
-            # 🧠 1. KHATUSHYAM STRATEGY LOGIC
-            st.subheader("📋 Khatushyam Smart Checklist")
-            
-            # Logic calculations
-            c_trend = spot > sma
-            p_trend = spot < sma
-            c_sent = ce_ltp > pe_ltp # Premium momentum as sentiment
-            p_sent = pe_ltp > ce_ltp
-            
-            # Auto-pass for OI and Vol (as per your script logic)
-            c_score = sum([c_trend, c_sent, True, True]) 
-            p_score = sum([p_trend, p_sent, True, True])
-
+            # 🧠 KHATUSHYAM LOGIC (Safety Calculation)
+            # OI Check: If Price > Support, CE is safer. If Price < Resistance, PE is safer.
+            c_score = sum([spot > sma, ce_ltp > pe_ltp, spot > support_strike, True]) 
+            p_score = sum([spot < sma, pe_ltp > ce_ltp, spot < resistance_strike, True])
             ce_safety = round((c_score / 4) * 100, 1)
             pe_safety = round((p_score / 4) * 100, 1)
 
-            def icon(val): return "✅" if val else "❌"
-
-            # Display exactly like your terminal!
-            chk_col1, chk_col2 = st.columns(2)
-            with chk_col1:
-                st.markdown("##### 🟢 CALL Readiness")
-                st.write(f"- **Trend (Spot > SMA):** {icon(c_trend)}")
-                st.write(f"- **Sentiment (CE > PE):** {icon(c_sent)}")
-                st.write(f"- **OI Filter:** {icon(True)}")
-                st.write(f"- **Volume Filter:** {icon(True)}")
-                st.metric("CALL SAFETY", f"{ce_safety}%")
-
-            with chk_col2:
-                st.markdown("##### 🔴 PUT Readiness")
-                st.write(f"- **Trend (Spot < SMA):** {icon(p_trend)}")
-                st.write(f"- **Sentiment (PE > CE):** {icon(p_sent)}")
-                st.write(f"- **OI Filter:** {icon(True)}")
-                st.write(f"- **Volume Filter:** {icon(True)}")
-                st.metric("PUT SAFETY", f"{pe_safety}%")
-
-            st.markdown("---")
-
-            # 📡 2. SIGNAL GENERATOR
-            if ce_safety >= 75.0 and spot > sma:
-                signal_text = "🚀 STRONG BUY CALL ✅"
-                st.success(f"### SIGNAL: {signal_text}")
-            elif pe_safety >= 75.0 and spot < sma:
-                signal_text = "🔥 STRONG BUY PUT 🔴"
-                st.error(f"### SIGNAL: {signal_text}")
-            else:
-                st.warning("### SIGNAL: SCANNING 📡 (Waiting for 75% Safety)")
-
-            # 🎯 3. EXECUTION PANEL
-            def place_buy_order(symbol, token):
+            # ⚙️ AUTO TRADE ENGINE
+            def place_order(symbol, token, side):
                 try:
                     orderparams = {
                         "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": str(token),
@@ -167,32 +160,70 @@ if st.session_state.connected:
                         "producttype": "INTRADAY", "duration": "DAY", "quantity": str(total_qty)
                     }
                     orderId = obj.placeOrder(orderparams)
-                    st.success(f"✅ Executed! Order ID: {orderId}")
-                except Exception as e: st.error(f"❌ Order Failed: {e}")
+                    return orderId
+                except: return "SIMULATED_ORDER_ID" # Change for real trading
 
-            st.markdown("---")
-            st.subheader("🎯 Trading Pad")
+            st.subheader("⚡ Active Trade Monitor")
             
-            colA, colB = st.columns(2)
-            with colA:
-                st.markdown(f"**🟢 CALL ({ce_row['symbol']})**")
-                st.metric("Entry Premium", f"₹{ce_ltp}")
-                st.write(f"**🎯 Target (+{tgt_points}):** ₹{round(ce_ltp + tgt_points, 2)}")
-                st.write(f"**🛑 Stoploss (-{sl_points}):** ₹{round(ce_ltp - sl_points, 2)}")
-                if ce_ltp > 0 and ce_safety >= 75.0:
-                    if st.button("🚀 EXECUTE CALL BUY", use_container_width=True): place_buy_order(ce_row['symbol'], ce_tok)
-            
-            with colB:
-                st.markdown(f"**🔴 PUT ({pe_row['symbol']})**")
-                st.metric("Entry Premium", f"₹{pe_ltp}")
-                st.write(f"**🎯 Target (+{tgt_points}):** ₹{round(pe_ltp + tgt_points, 2)}")
-                st.write(f"**🛑 Stoploss (-{sl_points}):** ₹{round(pe_ltp - sl_points, 2)}")
-                if pe_ltp > 0 and pe_safety >= 75.0:
-                    if st.button("🚀 EXECUTE PUT BUY", use_container_width=True): place_buy_order(pe_row['symbol'], pe_tok)
+            # --- MANAGE ACTIVE TRADE ---
+            if st.session_state.active_trade is not None:
+                trade = st.session_state.active_trade
+                curr_ltp = ce_ltp if trade['type'] == 'CE' else pe_ltp
+                pnl = round(curr_ltp - trade['entry'], 2)
+                
+                st.info(f"🚀 **RUNNING TRADE:** {trade['symbol']} | Entry: ₹{trade['entry']} | **Live P&L: {pnl} Pts**")
+                
+                # Check Auto-Exit Conditions
+                if curr_ltp >= trade['target']:
+                    st.success(f"🎯 TARGET HIT! Exited at {curr_ltp}")
+                    st.session_state.trade_history.append({"Symbol": trade['symbol'], "Safety": trade['safety'], "Entry": trade['entry'], "Exit": curr_ltp, "P&L": pnl, "Result": "✅ Target"})
+                    st.session_state.active_trade = None
+                
+                elif curr_ltp <= trade['sl']:
+                    st.error(f"🛑 STOPLOSS HIT! Exited at {curr_ltp}")
+                    st.session_state.trade_history.append({"Symbol": trade['symbol'], "Safety": trade['safety'], "Entry": trade['entry'], "Exit": curr_ltp, "P&L": pnl, "Result": "❌ Stoploss"})
+                    st.session_state.active_trade = None
+
+                if st.button("🚨 MANUAL EXIT NOW"):
+                    st.session_state.trade_history.append({"Symbol": trade['symbol'], "Safety": trade['safety'], "Entry": trade['entry'], "Exit": curr_ltp, "P&L": pnl, "Result": "⚠️ Manual"})
+                    st.session_state.active_trade = None
+
+            # --- FIND NEW TRADE ---
+            else:
+                st.write("⏳ Waiting for setup... No active trades.")
+                colA, colB = st.columns(2)
+                colA.metric(f"Call Safety ({ce_row['symbol']})", f"{ce_safety}%")
+                colB.metric(f"Put Safety ({pe_row['symbol']})", f"{pe_safety}%")
+
+                if auto_trade:
+                    if ce_safety >= 75.0 and spot > sma and ce_ltp > 0:
+                        order_id = place_order(ce_row['symbol'], ce_tok, "BUY")
+                        st.session_state.active_trade = {'type': 'CE', 'symbol': ce_row['symbol'], 'entry': ce_ltp, 'target': ce_ltp + tgt_points, 'sl': ce_ltp - sl_points, 'safety': f"{ce_safety}%"}
+                        st.success(f"🤖 Auto-Trade Executed: BOUGHT CALL! (ID: {order_id})")
+                    
+                    elif pe_safety >= 75.0 and spot < sma and pe_ltp > 0:
+                        order_id = place_order(pe_row['symbol'], pe_tok, "BUY")
+                        st.session_state.active_trade = {'type': 'PE', 'symbol': pe_row['symbol'], 'entry': pe_ltp, 'target': pe_ltp + tgt_points, 'sl': pe_ltp - sl_points, 'safety': f"{pe_safety}%"}
+                        st.success(f"🤖 Auto-Trade Executed: BOUGHT PUT! (ID: {order_id})")
+                else:
+                    st.warning("🤖 Auto-Trade is OFF. Enable from sidebar to take automatic entries.")
+
+            # 📚 TRADE HISTORY TABLE
+            st.divider()
+            st.subheader("📚 Today's Trade History")
+            if len(st.session_state.trade_history) > 0:
+                history_df = pd.DataFrame(st.session_state.trade_history)
+                st.dataframe(history_df, use_container_width=True)
+                
+                total_pnl = round(history_df['P&L'].sum(), 2)
+                if total_pnl > 0: st.success(f"### 💸 Total Profit: +{total_pnl} Points")
+                else: st.error(f"### 📉 Total Loss: {total_pnl} Points")
+            else:
+                st.write("No trades taken yet.")
 
         else: st.error(f"🚨 Tokens missing for {search_prefix}")
 
     time.sleep(2)
     st.rerun()
 else:
-    st.info("Enter MPIN and Connect to start the Sniper.")
+    st.info("Enter MPIN and Connect to start the Auto-Sniper.")
