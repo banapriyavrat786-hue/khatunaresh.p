@@ -1,81 +1,112 @@
 import streamlit as st
 from SmartApi import SmartConnect
 import pyotp
-import time
 import requests
 import pandas as pd
+import time
 
-# --- INITIALIZATION ---
+# --- 1. INITIALIZATION ---
 if 'connected' not in st.session_state: st.session_state.connected = False
-if 'token_map' not in st.session_state: st.session_state.token_map = None
+if 'obj' not in st.session_state: st.session_state.obj = None
+if 'token_df' not in st.session_state: st.session_state.token_df = None
 
-st.set_page_config(page_title="GRK SNIPER V8.2", layout="wide")
+# --- CONFIG ---
+FIXED_CLIENT_ID = "PS1646259" # Aapka exact Client ID jo video mein dikha
+st.set_page_config(page_title="GRK SNIPER V9", layout="wide")
 
-@st.cache_data(ttl=3600, show_spinner="Downloading Scrip Master...")
-def load_tokens():
+# --- 2. TOKEN ENGINE (With Error Bypass) ---
+@st.cache_data(ttl=3600)
+def fetch_tokens_safe():
     url = "https://margincalculator.angelbroking.com/OpenAPI_Standard/v1/json/OpenAPIScripMaster.json"
     try:
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
-            df = pd.DataFrame(r.json())
-            # Basic Filtering
-            df = df[df['exch_seg'] == 'NFO']
-            return df
+            full_df = pd.DataFrame(r.json())
+            return full_df[full_df['exch_seg'] == 'NFO']
         return None
     except:
         return None
 
-# --- SIDEBAR ---
-st.sidebar.title("🎯 GRK SNIPER V8.2")
-idx = st.sidebar.radio("Market Index", ["NIFTY", "BANKNIFTY"])
+# --- SIDEBAR UI ---
+st.sidebar.title("🎯 GRK SNIPER V9")
+idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 expiry_input = st.sidebar.text_input("Expiry (DDMMMYY)", value="02APR26").upper()
 
-if st.sidebar.button("Load Tokens & Connect"):
-    token_df = load_tokens()
-    if token_df is not None:
-        st.session_state.token_map = token_df
-        st.sidebar.success(f"✅ Loaded {len(token_df)} Symbols")
-        st.session_state.connected = True
-    else:
-        st.sidebar.error("❌ Angel Server down. Token map is Empty.")
-        # Optional: Yahan manual token bhi daal sakte ho testing ke liye
+st.sidebar.markdown("---")
+if st.sidebar.button("🛠️ Load Tokens"):
+    with st.spinner("Downloading Tokens..."):
+        st.session_state.token_df = fetch_tokens_safe()
+        if st.session_state.token_df is not None:
+            st.sidebar.success(f"✅ {len(st.session_state.token_df)} Symbols Loaded")
+        else:
+            st.sidebar.warning("⚠️ Server Down! Using Manual Mode.")
+
+# --- LOGIN SECTION ---
+api_key = st.sidebar.text_input("SmartAPI Key", value="MT72qa1q")
+mpin = st.sidebar.text_input("MPIN", type="password", max_chars=4)
+totp_key = st.sidebar.text_input("TOTP Secret", value="W6SCERQJX4RSU6TXECROABI7TA", type="password")
+
+if st.sidebar.button("🚀 Connect Bot"):
+    try:
+        otp = pyotp.TOTP(totp_key.strip().replace(" ", "")).now()
+        obj = SmartConnect(api_key=api_key.strip())
+        data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
+        if data['status']:
+            st.session_state.obj = obj
+            st.session_state.connected = True
+            st.sidebar.success("✅ Bot Live!")
+        else:
+            st.sidebar.error(f"❌ Login Error: {data['message']}")
+    except Exception as e:
+        st.sidebar.error(f"❌ Connection Error: {e}")
 
 # --- DASHBOARD ---
+st.title("🏹 MKPV SNIPER | LIVE TERMINAL")
+st.divider()
+
 if st.session_state.connected:
-    # Safely check if token_map exists before searching
-    if st.session_state.token_map is not None:
-        ltp = 22500.0 # Mock price for UI
+    # 1. LIVE SPOT FETCH
+    t_sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
+    t_tok = "26000" if idx == "NIFTY" else "26009"
+    
+    spot_res = st.session_state.obj.ltpData("NSE", t_sym, t_tok)
+    
+    if spot_res['status']:
+        ltp = float(spot_res['data']['ltp'])
         step = 50 if idx == "NIFTY" else 100
         atm = int(round(ltp / step) * step)
         
-        st.title(f"🏹 {idx} Sniper | ATM @ {atm}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"SPOT {idx}", f"₹{ltp}", delta="LIVE")
+        c2.metric("ATM STRIKE", atm)
+        c3.metric("STATUS", "STABLE ✅")
+
+        # 2. TOKEN SEARCH LOGIC
+        search_sym = f"{idx}{expiry_input}{atm}"
         
-        search_symbol = f"{idx}{expiry_input}{atm}"
-        df = st.session_state.token_map
+        col_ce, col_pe = st.columns(2)
         
-        # 🎯 CRITICAL FIX: Line 55 crash protection
-        try:
-            ce_match = df[df['symbol'].str.contains(f"{search_symbol}CE", na=False)]
-            pe_match = df[df['symbol'].str.contains(f"{search_symbol}PE", na=False)]
+        # Safe Search to prevent Crash
+        if st.session_state.token_df is not None:
+            df = st.session_state.token_df
+            ce_data = df[df['symbol'] == f"{search_sym}CE"]
+            pe_data = df[df['symbol'] == f"{search_sym}PE"]
+            
+            with col_ce:
+                if not ce_data.empty:
+                    st.success(f"🟢 {ce_data.iloc[0]['symbol']}")
+                    st.write(f"**Token:** `{ce_data.iloc[0]['token']}`")
+                else: st.warning(f"CE Token Not Found for {search_sym}")
 
-            col1, col2 = st.columns(2)
-            with col1:
-                if not ce_match.empty:
-                    st.success(f"🟢 CALL: {ce_match.iloc[0]['symbol']}")
-                    st.metric("Token", ce_match.iloc[0]['token'])
-                else:
-                    st.warning(f"CE Token not found for {search_symbol}")
+            with col_pe:
+                if not pe_data.empty:
+                    st.error(f"🔴 {pe_data.iloc[0]['symbol']}")
+                    st.write(f"**Token:** `{pe_data.iloc[0]['token']}`")
+                else: st.warning(f"PE Token Not Found for {search_sym}")
+        else:
+            st.info("💡 Tokens load nahi hue hain. Sidebar mein 'Load Tokens' dabayein.")
 
-            with col2:
-                if not pe_match.empty:
-                    st.error(f"🔴 PUT: {pe_match.iloc[0]['symbol']}")
-                    st.metric("Token", pe_match.iloc[0]['token'])
-                else:
-                    st.warning(f"PE Token not found for {search_symbol}")
-        except Exception as e:
-            st.error(f"Search Error: {e}")
-    else:
-        st.error("Token database is missing. Please click 'Load Tokens' again.")
-
+    time.sleep(1)
+    st.rerun()
 else:
-    st.info("👈 Please Load Tokens from sidebar to start.")
+    st.warning("👈 Please Login from the sidebar to see live data.")
