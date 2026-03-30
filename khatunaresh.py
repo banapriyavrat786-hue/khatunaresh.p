@@ -1,190 +1,160 @@
 import streamlit as st
 from SmartApi import SmartConnect
-import pyotp
-import pandas as pd
-import requests
-import time
+import pyotp, pandas as pd, requests, time
 from datetime import datetime
 
-# ========= CONFIG =========
+# -- CONFIGURATION --
+FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
-CLIENT_ID = "P51646259"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(layout="wide")
-st.title("🚀 MKPV SNIPER PRO MAX")
-
-# ========= SESSION =========
-if "connected" not in st.session_state:
-    st.session_state.connected = False
-if "obj" not in st.session_state:
-    st.session_state.obj = None
-if "df" not in st.session_state:
-    st.session_state.df = None
-
-# ========= FUNCTIONS =========
-def get_time():
-    try:
-        return requests.get(
-            "http://worldtimeapi.org/api/timezone/Asia/Kolkata", timeout=5
-        ).json()["unixtime"]
-    except:
-        return int(time.time())
-
-@st.cache_data(ttl=3600)
-def load_tokens():
-    url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-    data = requests.get(url).json()
-    df = pd.DataFrame(data)
-    df["expiry"] = pd.to_datetime(df["expiry"]).dt.date
-    return df
-
-def reconnect():
-    try:
-        otp = pyotp.TOTP(TOTP_SECRET).at(get_time())
-        res = st.session_state.obj.generateSession(
-            CLIENT_ID, st.session_state.mpin, otp
-        )
-        return res.get("status", False)
-    except:
-        return False
-
-# ========= SIDEBAR =========
+st.set_page_config(page_title="GRK Sniper Pro", layout="wide")
+st.title("🚀 Option Chain Sniper Bot")
 st.sidebar.title("Controls")
 
+# -- SESSION STATE INIT --
+if 'connected' not in st.session_state: st.session_state.connected = False
+if 'obj' not in st.session_state: st.session_state.obj = None
+if 'token_df' not in st.session_state: st.session_state.token_df = None
+if 'mpin' not in st.session_state: st.session_state.mpin = ""
+
+# -- HELPER FUNCTIONS --
+def get_internet_time():
+    try:
+        r = requests.get("http://worldtimeapi.org/api/timezone/Asia/Kolkata", timeout=5)
+        return r.json()['unixtime']
+    except: return int(time.time())
+
+@st.cache_data(ttl=3600, show_spinner="Loading Master File (50MB)...")
+def load_tokens():
+    url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+    try:
+        res = requests.get(url, timeout=15)
+        if res.status_code == 200:
+            df = pd.DataFrame(res.json())
+            # ONLY keep NFO to save memory & speed up
+            df = df[df['exch_seg'] == 'NFO']
+            # Convert Expiry string to Datetime Object for easy comparison
+            df['expiry'] = pd.to_datetime(df['expiry'], errors='coerce')
+            # Convert strike price to float
+            df['strike'] = pd.to_numeric(df['strike'], errors='coerce')
+            return df
+        return None
+    except Exception as e:
+        st.error(f"Failed to load token master: {e}")
+        return None
+
+# -- SIDEBAR INPUTS --
 index = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
+
+# 💡 FIX 1: Expiry Input Format Change (Match the JSON format directly)
+# Suggest standard format like "02APR26" and let code handle conversion
+expiry_str = st.sidebar.text_input("Expiry (e.g. 02APR26 or 09MAY26)", "02APR26").upper()
 mpin = st.sidebar.text_input("MPIN", type="password", max_chars=4)
 
 if st.sidebar.button("🔑 Connect"):
-    if len(mpin) != 4:
-        st.sidebar.error("Enter 4 digit MPIN")
+    if len(mpin) != 4: st.sidebar.error("Enter a 4-digit MPIN")
     else:
         st.session_state.mpin = mpin
-        otp = pyotp.TOTP(TOTP_SECRET).at(get_time())
+        otp = pyotp.TOTP(TOTP_SECRET.strip().replace(" ", "")).at(get_internet_time())
+        smart_obj = SmartConnect(api_key=API_KEY.strip())
+        
+        try:
+            login = smart_obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
+            if login and login.get('status'):
+                st.sidebar.success("✅ Connected")
+                st.session_state.connected = True
+                st.session_state.obj = smart_obj
+                
+                df = load_tokens()
+                if df is not None:
+                    st.session_state.token_df = df
+                    st.sidebar.success("✅ Tokens mapped!")
+                else: st.sidebar.error("Token load failed")
+            else:
+                msg = login.get('message') if login else "No response"
+                st.sidebar.error(f"Login failed: {msg}")
+        except Exception as e:
+            st.sidebar.error(f"Login Error: {e}")
 
-        st.sidebar.info(f"OTP: {otp}")
-
-        obj = SmartConnect(api_key=API_KEY)
-        data = obj.generateSession(CLIENT_ID, mpin, otp)
-
-        if data.get("status"):
-            st.sidebar.success("✅ Connected")
-            st.session_state.connected = True
-            st.session_state.obj = obj
-            st.session_state.df = load_tokens()
-            st.sidebar.success("Tokens Loaded")
-        else:
-            st.sidebar.error(data.get("message"))
-
-# ========= MAIN =========
-col1, col2, col3 = st.columns(3)
-
+# -- MAIN AREA --
 if st.session_state.connected:
-
     obj = st.session_state.obj
-    df = st.session_state.df
+    df = st.session_state.token_df
 
     try:
-        # -------- SPOT --------
-        if index == "NIFTY":
-            symbol = "Nifty 50"
-            token = "26000"
-            name = "NIFTY"
-        else:
-            symbol = "Nifty Bank"
-            token = "26009"
-            name = "BANKNIFTY"
+        # 1. Spot Price Calculation
+        t_name = "Nifty 50" if index=="NIFTY" else "Nifty Bank"
+        t_tok = "26000" if index=="NIFTY" else "26009"
+        step = 50 if index=="NIFTY" else 100
+        
+        res = obj.ltpData("NSE", t_name, t_tok)
+        
+        if res.get('status'):
+            spot = float(res['data']['ltp'])
+            atm = int(round(spot / step) * step)
 
-        res = obj.ltpData("NSE", symbol, token)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Spot", f"₹{spot}")
+            c2.metric("ATM Strike", atm)
+            c3.metric("Status", "LIVE ✅")
+            
+            st.markdown("### 📊 Live ATM Option Data")
 
-        if not res.get("status"):
-            st.error("Session expired")
-            if reconnect():
-                st.experimental_rerun()
+            # 💡 FIX 2: String-Based Symbol Matching (Bulletproof)
+            # Instead of matching date and strike math, we build the exact Symbol String
+            # Angel Symbol Format: NIFTY02APR2622450CE
+            search_prefix = f"{index}{expiry_str}{atm}"
+            ce_sym = f"{search_prefix}CE"
+            pe_sym = f"{search_prefix}PE"
+
+            # Search in the token dataframe
+            ce_match = df[df['symbol'] == ce_sym]
+            pe_match = df[df['symbol'] == pe_sym]
+
+            if ce_match.empty or pe_match.empty:
+                st.error(f"🚨 Tokens not found for: {ce_sym} or {pe_sym}")
+                st.info("Check if you entered the exact Expiry String (e.g. '04APR24' instead of '04APR2024').")
+                
+                # Debug Mode
+                if st.sidebar.checkbox("🔍 Debug: Show Available Symbols"):
+                    # Show similar symbols to help user find correct format
+                    similar = df[df['name'] == index]
+                    # Filter by strike to limit results
+                    similar = similar[similar['strike'] == (atm * 100)] 
+                    st.write(similar[['symbol', 'expiry', 'strike']].head(10))
             else:
-                st.stop()
+                ce_row = ce_match.iloc[0]
+                pe_row = pe_match.iloc[0]
 
-        spot = res["data"]["ltp"]
-        atm = round(spot / 50) * 50
+                # Fetch Real-Time LTP for Options
+                ce_res = obj.ltpData("NFO", ce_row['symbol'], ce_row['token'])
+                pe_res = obj.ltpData("NFO", pe_row['symbol'], pe_row['token'])
 
-        col1.metric("Spot", f"₹{spot}")
-        col2.metric("ATM", atm)
-        col3.metric("Status", "LIVE ✅")
+                ce_ltp = ce_res['data']['ltp'] if ce_res.get('status') else 0.0
+                pe_ltp = pe_res['data']['ltp'] if pe_res.get('status') else 0.0
+                
+                colA, colB = st.columns(2)
+                colA.metric(f"🟢 Call (CE) @ {atm}", f"₹{ce_ltp}")
+                colB.metric(f"🔴 Put (PE) @ {atm}", f"₹{pe_ltp}")
 
-        # -------- FILTER --------
-        df_index = df[df["name"] == name]
+                # --- ADVANCED ANALYSIS PLACEHOLDER ---
+                # To calculate PCR, we need Open Interest (OI) from getQuote API
+                st.markdown("---")
+                st.subheader("⚙️ Trading Strategy Mode")
+                st.warning("Next Step: Fetch Open Interest to calculate Put-Call Ratio (PCR).")
 
-        # ✅ AUTO EXPIRY
-        expiry = sorted(df_index["expiry"].unique())[0]
-
-        df_exp = df_index[df_index["expiry"] == expiry].copy()
-
-        # ✅ STRIKE FIX
-        df_exp["strike"] = df_exp["strike"].astype(float) / 100
-
-        # ✅ NEAREST STRIKE
-        nearest = df_exp.iloc[(df_exp["strike"] - atm).abs().argsort()[:1]]
-        atm = int(nearest["strike"].values[0])
-
-        # CE / PE
-        ce = df_exp[(df_exp["strike"] == atm) & df_exp["symbol"].str.endswith("CE")]
-        pe = df_exp[(df_exp["strike"] == atm) & df_exp["symbol"].str.endswith("PE")]
-
-        if ce.empty or pe.empty:
-            st.error("Option not found")
-
-            if st.sidebar.checkbox("Debug"):
-                st.write(df_exp.head(20))
-
-            st.stop()
-
-        ce = ce.iloc[0]
-        pe = pe.iloc[0]
-
-        # -------- LTP --------
-        ce_data = obj.ltpData("NFO", ce["symbol"], ce["token"])
-        pe_data = obj.ltpData("NFO", pe["symbol"], pe["token"])
-
-        ce_ltp = ce_data["data"]["ltp"] if ce_data.get("status") else 0
-        pe_ltp = pe_data["data"]["ltp"] if pe_data.get("status") else 0
-
-        ce_oi = ce_data["data"].get("openInterest", 0)
-        pe_oi = pe_data["data"].get("openInterest", 0)
-
-        c1, c2 = st.columns(2)
-        c1.metric("CALL CE", f"₹{ce_ltp}")
-        c2.metric("PUT PE", f"₹{pe_ltp}")
-
-        # -------- ANALYSIS --------
-        total = ce_oi + pe_oi + 1
-        pcr = round(pe_oi / total, 2)
-        strength = int(pe_oi / total * 100)
-
-        if pcr > 1:
-            signal = "📈 BUY CALL"
-        elif pcr < 0.7:
-            signal = "📉 BUY PUT"
         else:
-            signal = "⚖️ WAIT"
-
-        support = atm if pe_oi > ce_oi else atm - 50
-        resistance = atm if ce_oi > pe_oi else atm + 50
-
-        st.markdown("### 📊 Analysis")
-        st.write(f"PCR: {pcr}")
-        st.write(f"Strength: {strength}%")
-        st.write(f"Support: {support}")
-        st.write(f"Resistance: {resistance}")
-
-        st.markdown(f"## 🔥 {signal}")
-
+            st.error("Failed to fetch Spot Price. Checking connection...")
+            
     except Exception as e:
-        st.error(e)
-
-    time.sleep(1)
-    st.experimental_rerun()
+        st.error(f"Runtime Error: {e}")
+        
+    time.sleep(1.5)
+    st.rerun()
 
 else:
-    col1.metric("Spot", "0")
-    col2.metric("ATM", "0")
-    col3.metric("Status", "OFFLINE ❌")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Spot", "₹0")
+    c2.metric("ATM Strike", "0")
+    c3.metric("Status", "OFFLINE ❌")
