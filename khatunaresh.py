@@ -2,21 +2,19 @@ import streamlit as st
 from SmartApi import SmartConnect
 import pyotp
 import time
-import requests
 
-# 1. INITIALIZATION (Isse Attribute Error khatam ho jayega)
-if 'connected' not in st.session_state:
-    st.session_state.connected = False
-if 'obj' not in st.session_state:
-    st.session_state.obj = None
+# --- INITIALIZATION ---
+if 'connected' not in st.session_state: st.session_state.connected = False
+if 'obj' not in st.session_state: st.session_state.obj = None
 
 # --- CONFIG ---
 FIXED_CLIENT_ID = "P51646259"
-st.set_page_config(page_title="GRK SNIPER V6", layout="wide")
+st.set_page_config(page_title="GRK SNIPER V7", layout="wide")
 
 # --- SIDEBAR ---
-st.sidebar.title("🎯 GRK SNIPER V6")
-idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
+st.sidebar.title("🎯 GRK SNIPER V7")
+idx = st.sidebar.radio("Market Index", ["NIFTY", "BANKNIFTY"])
+expiry_date = st.sidebar.text_input("Current Expiry (DDMMMYY)", value="02APR26")
 
 st.sidebar.markdown("---")
 api_key = st.sidebar.text_input("1. SmartAPI Key", value="MT72qa1q")
@@ -31,31 +29,56 @@ if st.sidebar.button("Connect Sniper"):
         if data['status']:
             st.session_state.obj = obj
             st.session_state.connected = True
-            st.sidebar.success("✅ Connected!")
-        else:
-            st.sidebar.error(f"❌ Login Failed: {data['message']}")
-    except Exception as e:
-        st.sidebar.error(f"❌ Error: {e}")
+            st.sidebar.success("✅ Sniper Ready!")
+        else: st.sidebar.error(f"❌ Login Failed: {data['message']}")
+    except Exception as e: st.sidebar.error(f"❌ Error: {e}")
 
-# --- MAIN DASHBOARD ---
-st.title("🏹 MKPV SNIPER | LIVE DATA")
+# --- DASHBOARD INTERFACE ---
+st.title("🏹 MKPV SNIPER | REAL-TIME ANALYZER")
 st.divider()
-
-col1, col2, col3 = st.columns(3)
 
 if st.session_state.connected:
     try:
-        # Index Mapping
         t_sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
         t_tok = "26000" if idx == "NIFTY" else "26009"
         
-        # LTP Fetch
+        # 1. Fetch Spot Price
         res = st.session_state.obj.ltpData("NSE", t_sym, t_tok)
         if res['status']:
-            ltp = res['data']['ltp']
-            col1.metric(f"SPOT {idx}", f"₹{ltp}", delta="LIVE")
-            col2.metric("Pipeline", "CONNECTED ✅")
-            col3.metric("Status", "Fetching OI...")
+            ltp = float(res['data']['ltp'])
+            step = 50 if idx == "NIFTY" else 100
+            atm = int(round(ltp / step) * step)
+
+            # 2. Top Metrics Section
+            m1, m2, m3 = st.columns(3)
+            m1.metric(f"{idx} SPOT", f"₹{ltp}", delta="LIVE")
+            m2.metric("ATM STRIKE", f"{atm}")
+            m3.metric("PIPELINE", "STABLE ✅")
+
+            st.divider()
+
+            # 3. Option Chain Analysis UI
+            st.subheader(f"📊 {idx} Option Chain (Targeting ATM @ {atm})")
+            
+            col_ce, col_pe = st.columns(2)
+            
+            with col_ce:
+                st.info(f"🟢 CALL (CE) - Resistance Zone")
+                st.metric("LTP", "Fetching...", help="Searching NFO Token")
+                st.metric("Open Interest (OI)", "0", delta="0%", delta_color="normal")
+                st.progress(50, text="Call Writing")
+
+            with col_pe:
+                st.info(f"🔴 PUT (PE) - Support Zone")
+                st.metric("LTP", "Fetching...", help="Searching NFO Token")
+                st.metric("Open Interest (OI)", "0", delta="0%", delta_color="inverse")
+                st.progress(50, text="Put Writing")
+
+            # Strategy Signal
+            st.divider()
+            st.subheader("⚡ Trading Signal")
+            st.warning("⚠️ Waiting for NFO Token mapping to find PCR (Put-Call Ratio)...")
+
         else:
             st.session_state.connected = False
             st.rerun()
@@ -66,6 +89,4 @@ if st.session_state.connected:
     time.sleep(1)
     st.rerun()
 else:
-    col1.metric(f"SPOT {idx}", "₹0")
-    col2.metric("Pipeline", "OFFLINE ❌")
-    col3.metric("Status", "Waiting...")
+    st.warning("Sniper Offline. Connect via Sidebar to see Live Option Chain Interface.")
