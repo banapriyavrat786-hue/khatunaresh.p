@@ -27,7 +27,7 @@ if "df" not in st.session_state:
     st.session_state.df = None
 
 # ==========================================
-# INTERNET TIME (ACCURATE OTP)
+# INTERNET TIME (OTP FIX)
 # ==========================================
 def get_internet_time():
     try:
@@ -37,7 +37,7 @@ def get_internet_time():
         return time.time()
 
 # ==========================================
-# LOAD TOKEN MASTER
+# TOKEN LOAD
 # ==========================================
 def load_tokens():
     try:
@@ -62,7 +62,7 @@ mpin = st.sidebar.text_input("MPIN", type="password", max_chars=4)
 if st.sidebar.button("🚀 Sync & Connect"):
 
     if len(mpin) != 4:
-        st.sidebar.error("Enter valid 4 digit MPIN")
+        st.sidebar.error("Enter valid MPIN")
     else:
         try:
             # OTP
@@ -80,7 +80,6 @@ if st.sidebar.button("🚀 Sync & Connect"):
                 st.session_state.obj = obj
                 st.session_state.connected = True
 
-                # LOAD TOKENS
                 df = load_tokens()
                 if df is not None:
                     st.session_state.df = df
@@ -132,16 +131,26 @@ if st.session_state.connected:
         st.markdown("### 📊 ATM Option Chain")
 
         # ==========================================
-        # FIX EXPIRY
+        # ✅ FINAL SYMBOL MATCH FIX
         # ==========================================
-        expiry_short = expiry[:-4] + expiry[-2:]
-        base = f"NIFTY{expiry_short}{atm}"
+        expiry_short = expiry[:5] + expiry[-2:]
 
-        ce_row = df[df['symbol'].str.contains(base + "CE", na=False)]
-        pe_row = df[df['symbol'].str.contains(base + "PE", na=False)]
+        ce_row = df[
+            (df['name'] == 'NIFTY') &
+            (df['expiry'].str.contains(expiry_short)) &
+            (df['strike'] == float(atm * 100)) &
+            (df['symbol'].str.endswith("CE"))
+        ]
+
+        pe_row = df[
+            (df['name'] == 'NIFTY') &
+            (df['expiry'].str.contains(expiry_short)) &
+            (df['strike'] == float(atm * 100)) &
+            (df['symbol'].str.endswith("PE"))
+        ]
 
         if ce_row.empty or pe_row.empty:
-            st.warning("Symbols not found. Check expiry.")
+            st.error("❌ Option not found. Check expiry.")
             st.stop()
 
         ce = ce_row.iloc[0]
@@ -181,8 +190,8 @@ if st.session_state.connected:
         # ==========================================
         colA, colB = st.columns(2)
 
-        colA.metric("CALL LTP", f"₹{ce_ltp}")
-        colB.metric("PUT LTP", f"₹{pe_ltp}")
+        colA.metric("CALL (CE)", f"₹{ce_ltp}")
+        colB.metric("PUT (PE)", f"₹{pe_ltp}")
 
         st.markdown("### 📊 Analysis")
 
