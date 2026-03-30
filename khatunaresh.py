@@ -4,68 +4,68 @@ import pyotp
 import time
 import requests
 
-# ==========================================
-# CONFIG & TOKEN CACHE
-# ==========================================
+# 1. INITIALIZATION (Isse Attribute Error khatam ho jayega)
+if 'connected' not in st.session_state:
+    st.session_state.connected = False
+if 'obj' not in st.session_state:
+    st.session_state.obj = None
+
+# --- CONFIG ---
 FIXED_CLIENT_ID = "P51646259"
+st.set_page_config(page_title="GRK SNIPER V6", layout="wide")
 
-if 'token_map' not in st.session_state:
-    # 🎯 Background mein Angel ki Master list load karne ka logic
+# --- SIDEBAR ---
+st.sidebar.title("🎯 GRK SNIPER V6")
+idx = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
+
+st.sidebar.markdown("---")
+api_key = st.sidebar.text_input("1. SmartAPI Key", value="MT72qa1q")
+mpin = st.sidebar.text_input("2. MPIN", type="password", max_chars=4)
+totp_key = st.sidebar.text_input("3. TOTP Secret", value="W6SCERQJX4RSU6TXECROABI7TA", type="password")
+
+if st.sidebar.button("Connect Sniper"):
     try:
-        url = "https://margincalculator.angelbroking.com/OpenAPI_Standard/v1/Symbol2VerNo.json"
-        response = requests.get(url).json()
-        st.session_state.token_map = response
-    except:
-        st.session_state.token_map = []
+        otp = pyotp.TOTP(totp_key.strip().replace(" ", "")).now()
+        obj = SmartConnect(api_key=api_key.strip())
+        data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
+        if data['status']:
+            st.session_state.obj = obj
+            st.session_state.connected = True
+            st.sidebar.success("✅ Connected!")
+        else:
+            st.sidebar.error(f"❌ Login Failed: {data['message']}")
+    except Exception as e:
+        st.sidebar.error(f"❌ Error: {e}")
 
-def get_token(symbol, exchange="NFO"):
-    for item in st.session_state.token_map:
-        if item['symbol'] == symbol and item['exch_seg'] == exchange:
-            return item['token']
-    return None
+# --- MAIN DASHBOARD ---
+st.title("🏹 MKPV SNIPER | LIVE DATA")
+st.divider()
 
-# ==========================================
-# MAIN APP (Updated Section)
-# ==========================================
-# ... (Pura purana Sidebar code rehne dein) ...
+col1, col2, col3 = st.columns(3)
 
 if st.session_state.connected:
     try:
-        # 1. ATM Calculate karein
+        # Index Mapping
         t_sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
-        spot_res = st.session_state.obj.ltpData("NSE", t_sym, "26000" if idx=="NIFTY" else "26009")
+        t_tok = "26000" if idx == "NIFTY" else "26009"
         
-        if spot_res['status']:
-            ltp = float(spot_res['data']['ltp'])
-            step = 50 if idx == "NIFTY" else 100
-            atm = int(round(ltp / step) * step)
-
-            # 2. Options ka Data Fetch karein
-            ce_symbol = f"{idx.upper()}{expiry}{atm}CE"
-            pe_symbol = f"{idx.upper()}{expiry}{atm}PE"
-            
-            ce_token = get_token(ce_symbol)
-            pe_token = get_token(pe_symbol)
-
-            # 3. Agar token mil gaya toh Live Data dikhayein
-            if ce_token and pe_token:
-                # Fetching Multiple LTPs in one go
-                payload = {
-                    "exchange": "NFO",
-                    "symboltoken": ce_token,
-                    "tradingsymbol": ce_symbol
-                }
-                # Hum 'getQuote' API use karenge OI aur Volume ke liye
-                res = st.session_state.obj.getQuote("NFO", ce_symbol, ce_token)
-                # ... (Display Metrics here) ...
-            
-            # --- DASHBOARD UI UPDATED ---
-            st.subheader(f"📊 Market Structure: {idx} (ATM @ {atm})")
-            # Metrics...
-            
+        # LTP Fetch
+        res = st.session_state.obj.ltpData("NSE", t_sym, t_tok)
+        if res['status']:
+            ltp = res['data']['ltp']
+            col1.metric(f"SPOT {idx}", f"₹{ltp}", delta="LIVE")
+            col2.metric("Pipeline", "CONNECTED ✅")
+            col3.metric("Status", "Fetching OI...")
         else:
             st.session_state.connected = False
             st.rerun()
-
+            
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Data Fetch Error: {e}")
+    
+    time.sleep(1)
+    st.rerun()
+else:
+    col1.metric(f"SPOT {idx}", "₹0")
+    col2.metric("Pipeline", "OFFLINE ❌")
+    col3.metric("Status", "Waiting...")
