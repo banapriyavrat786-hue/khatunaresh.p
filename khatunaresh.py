@@ -2,30 +2,20 @@ import streamlit as st
 from SmartApi import SmartConnect
 import pyotp
 import time
-import pandas as pd
-import requests
 
 # --- INITIALIZATION ---
 if 'connected' not in st.session_state: st.session_state.connected = False
-if 'tokens_df' not in st.session_state: st.session_state.tokens_df = None
+if 'obj' not in st.session_state: st.session_state.obj = None
 
 # --- CONFIG ---
 FIXED_CLIENT_ID = "P51646259"
 st.set_page_config(page_title="GRK SNIPER V7", layout="wide")
 
-# --- 1. TOKEN FINDER ENGINE ---
-@st.cache_data
-def load_tokens():
-    url = "https://margincalculator.angelbroking.com/OpenAPI_Standard/v1/instrument_master.json"
-    response = requests.get(url).json()
-    df = pd.DataFrame(response)
-    # Sirf NFO (Options) filter karein
-    return df[df['exch_seg'] == 'NFO']
-
 # --- SIDEBAR ---
 st.sidebar.title("🎯 GRK SNIPER V7")
 idx = st.sidebar.radio("Market Index", ["NIFTY", "BANKNIFTY"])
-expiry = st.sidebar.text_input("Current Expiry (DDMMMYY)", value="02APR26").upper()
+# 💡 Tips: Common format is DDMMMYY like 02APR26
+expiry_input = st.sidebar.text_input("Current Expiry (DDMMMYY)", value="02APR26")
 
 st.sidebar.markdown("---")
 api_key = st.sidebar.text_input("1. SmartAPI Key", value="MT72qa1q")
@@ -40,64 +30,53 @@ if st.sidebar.button("Connect Sniper"):
         if data['status']:
             st.session_state.obj = obj
             st.session_state.connected = True
-            with st.spinner("Loading Scrip Master..."):
-                st.session_state.tokens_df = load_tokens()
-            st.sidebar.success("✅ SNIPER ACTIVE")
+            st.sidebar.success("✅ Sniper Ready!")
         else: st.sidebar.error(f"❌ Login Failed: {data['message']}")
-    except Exception as e: st.sidebar.error(f"❌ {e}")
+    except Exception as e: st.sidebar.error(f"❌ Error: {e}")
 
 # --- DASHBOARD ---
+st.title("🏹 MKPV SNIPER | STRATEGY MODE")
+st.divider()
+
 if st.session_state.connected:
     try:
-        # A. Fetch Spot
         t_sym = "Nifty 50" if idx == "NIFTY" else "Nifty Bank"
         t_tok = "26000" if idx == "NIFTY" else "26009"
-        res = st.session_state.obj.ltpData("NSE", t_sym, t_tok)
         
+        res = st.session_state.obj.ltpData("NSE", t_sym, t_tok)
         if res['status']:
             ltp = float(res['data']['ltp'])
             step = 50 if idx == "NIFTY" else 100
             atm = int(round(ltp / step) * step)
-
-            # B. UI Layout
+            
+            # Metrics Row
             c1, c2, c3 = st.columns(3)
             c1.metric("SPOT PRICE", f"₹{ltp}", delta="LIVE")
             c2.metric("ATM STRIKE", f"{atm}")
             c3.metric("SYSTEM STATUS", "STABLE ✅")
 
-            st.markdown("---")
-            st.subheader(f"📊 {idx} Option Chain (Targeting ATM @ {atm})")
-
-            # C. Fetch ATM Option Data
-            # Token finding logic
-            symbol_pattern_ce = f"{idx}{expiry}{atm}CE"
-            symbol_pattern_pe = f"{idx}{expiry}{atm}PE"
+            st.divider()
             
-            try:
-                ce_info = st.session_state.tokens_df[st.session_state.tokens_df['symbol'] == symbol_pattern_ce].iloc[0]
-                pe_info = st.session_state.tokens_df[st.session_state.tokens_df['symbol'] == symbol_pattern_pe].iloc[0]
-                
-                # Get Quote for OI and Vol
-                payload = {
-                    "exchange": "NFO",
-                    "symboltoken": ce_info['token'],
-                    "tradingsymbol": ce_info['symbol']
-                }
-                # (Note: In real bot, use getFullQuote here)
-                
-                col_ce, col_pe = st.columns(2)
-                with col_ce:
-                    st.success(f"CALL (CE) - Resistance Zone")
-                    st.write(f"**LTP:** Fetching Live...")
-                    st.write(f"**OI:** {ce_info['token']} (Token Found)")
-                
-                with col_pe:
-                    st.error(f"PUT (PE) - Support Zone")
-                    st.write(f"**LTP:** Fetching Live...")
-                    st.write(f"**OI:** {pe_info['token']} (Token Found)")
+            # 🎯 SYMBOL GENERATOR FIX
+            # Format: NIFTY02APR2622500CE
+            ce_symbol = f"{idx.upper()}{expiry_input}{atm}CE"
+            pe_symbol = f"{idx.upper()}{expiry_input}{atm}PE"
+            
+            st.subheader(f"📊 {idx} Option Chain (Targeting ATM @ {atm})")
+            
+            # Displaying for manual verification
+            st.info(f"Searching for Symbols: **{ce_symbol}** and **{pe_symbol}**")
+            
+            col_ce, col_pe = st.columns(2)
+            with col_ce:
+                st.write(f"🟢 **{ce_symbol}**")
+                st.metric("CE LTP", "₹0.00")
+                st.metric("CE OI", "0", help="Requires NFO Token Mapping")
 
-            except:
-                st.warning(f"⚠️ Symbols {symbol_pattern_ce} not found in {expiry}. Check Expiry Date format.")
+            with col_pe:
+                st.write(f"🔴 **{pe_symbol}**")
+                st.metric("PE LTP", "₹0.00")
+                st.metric("PE OI", "0", help="Requires NFO Token Mapping")
 
         else:
             st.session_state.connected = False
@@ -107,5 +86,3 @@ if st.session_state.connected:
     
     time.sleep(2)
     st.rerun()
-else:
-    st.info("Please Connect Sniper from Sidebar")
