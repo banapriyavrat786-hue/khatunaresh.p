@@ -3,79 +3,90 @@ from SmartApi import SmartConnect
 import pyotp
 import requests
 import time
+import pandas as pd
+
+# --- INITIALIZATION ---
+if 'connected' not in st.session_state: st.session_state.connected = False
+if 'token_df' not in st.session_state: st.session_state.token_df = None
 
 # --- CONFIG ---
 FIXED_CLIENT_ID = "P51646259"
 MY_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-def get_internet_time():
+st.set_page_config(page_title="GRK SNIPER V14", layout="wide")
+
+# --- TOKEN ENGINE (Background Search) ---
+@st.cache_data(ttl=3600)
+def load_nfo_tokens():
     try:
-        response = requests.get("http://worldtimeapi.org/api/timezone/Asia/Kolkata", timeout=5)
-        return response.json()['unixtime']
-    except: return time.time()
+        url = "https://margincalculator.angelbroking.com/OpenAPI_Standard/v1/json/OpenAPIScripMaster.json"
+        df = pd.DataFrame(requests.get(url).json())
+        return df[df['exch_seg'] == 'NFO']
+    except: return None
 
-if 'connected' not in st.session_state: st.session_state.connected = False
-if 'obj' not in st.session_state: st.session_state.obj = None
+# --- SIDEBAR ---
+st.sidebar.title("🎯 GRK SNIPER V14")
+idx_choice = st.sidebar.radio("Market", ["NIFTY", "BANKNIFTY"])
+expiry = st.sidebar.text_input("Expiry (DDMMMYY)", value="02APR26").upper()
+mpin = st.sidebar.text_input("Enter MPIN", type="password", max_chars=4)
 
-st.set_page_config(page_title="GRK WARRIOR V13", layout="wide")
-
-# --- SIDEBAR LOGIN ---
-st.sidebar.title("🚀 GRK WARRIOR V13")
-user_mpin = st.sidebar.text_input("Enter 4-Digit MPIN", type="password", max_chars=4)
-
-if st.sidebar.button("🚀 Sync & Connect"):
+if st.sidebar.button("🚀 Start Sniper"):
     try:
-        accurate_time = get_internet_time()
-        otp = pyotp.TOTP(MY_SECRET.strip().replace(" ", "")).at(accurate_time)
+        # Time Sync & OTP
+        res_time = requests.get("http://worldtimeapi.org/api/timezone/Asia/Kolkata").json()
+        otp = pyotp.TOTP(MY_SECRET.strip().replace(" ", "")).at(res_time['unixtime'])
+        
         obj = SmartConnect(api_key="MT72qa1q")
-        data = obj.generateSession(FIXED_CLIENT_ID, user_mpin, otp)
+        data = obj.generateSession(FIXED_CLIENT_ID, mpin, otp)
+        
         if data['status']:
             st.session_state.obj = obj
+            st.session_state.token_df = load_nfo_tokens()
             st.session_state.connected = True
-            st.sidebar.success("✅ Login Success!")
-    except Exception as e: st.sidebar.error(f"❌ Error: {e}")
+            st.sidebar.success("✅ Sniper Online!")
+    except Exception as e: st.sidebar.error(f"Error: {e}")
 
 # --- DASHBOARD ---
 if st.session_state.connected:
-    st.title("🎯 MKPV LIVE TERMINAL | OI ANALYSIS")
+    st.title("🏹 MKPV ULTRA SNIPER | LIVE")
     
-    # 1. LIVE PRICE & ATM CALCULATION
-    c1, c2 = st.columns(2)
-    indices = [
-        {"name": "Nifty 50", "token": "26000", "step": 50},
-        {"name": "Nifty Bank", "token": "26009", "step": 100}
-    ]
-
-    for i, idx in enumerate(indices):
-        res = st.session_state.obj.ltpData("NSE", idx['name'], idx['token'])
-        if res['status']:
-            price = float(res['data']['ltp'])
-            atm = int(round(price / idx['step']) * idx['step'])
-            c1 if i==0 else c2
-            st.metric(idx['name'], f"₹{price}", help=f"ATM Strike: {atm}")
-
-    st.divider()
-
-    # 2. OPTION CHAIN ANALYZER (Placeholder for now)
-    st.subheader("📊 Market Sentiment (PCR & OI)")
+    # 1. LIVE DATA
+    t_name = "Nifty 50" if idx_choice == "NIFTY" else "Nifty Bank"
+    t_tok = "26000" if idx_choice == "NIFTY" else "26009"
+    step = 50 if idx_choice == "NIFTY" else 100
     
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("PCR (Put-Call Ratio)", "1.05", delta="Bullish Bias")
-    col_b.metric("Support Strike", "22450", delta="Strong")
-    col_c.metric("Resistance Strike", "22600", delta="Strong")
+    res = st.session_state.obj.ltpData("NSE", t_name, t_tok)
+    if res['status']:
+        ltp = float(res['data']['ltp'])
+        atm = int(round(ltp / step) * step)
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"SPOT {idx_choice}", f"₹{ltp}")
+        c2.metric("ATM STRIKE", atm)
+        c3.metric("EXPIRY", expiry)
 
-    # 3. QUICK EXECUTION PANEL
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("⚡ Sniper Trigger")
-    trade_lot = st.sidebar.number_input("Lot Size", value=1)
-    
-    if st.sidebar.button("BUY ATM CALL"):
-        st.sidebar.warning("Buying Signal... Token mapping required.")
-    
-    if st.sidebar.button("BUY ATM PUT"):
-        st.sidebar.warning("Selling Signal... Token mapping required.")
+        # 2. TOKEN MAPPING (Asli Trading ke liye)
+        st.divider()
+        search_sym = f"{idx_choice}{expiry}{atm}"
+        df = st.session_state.token_df
+        
+        ce_data = df[df['symbol'] == f"{search_sym}CE"] if df is not None else pd.DataFrame()
+        pe_data = df[df['symbol'] == f"{search_sym}PE"] if df is not None else pd.DataFrame()
+
+        col_ce, col_pe = st.columns(2)
+        with col_ce:
+            if not ce_data.empty:
+                st.success(f"🟢 CALL: {ce_data.iloc[0]['symbol']}")
+                st.write(f"Token ID: `{ce_data.iloc[0]['token']}`")
+            else: st.warning(f"Searching CE Token for {atm}...")
+
+        with col_pe:
+            if not pe_data.empty:
+                st.error(f"🔴 PUT: {pe_data.iloc[0]['symbol']}")
+                st.write(f"Token ID: `{pe_data.iloc[0]['token']}`")
+            else: st.warning(f"Searching PE Token for {atm}...")
 
     time.sleep(2)
     st.rerun()
 else:
-    st.info("👈 Login from sidebar to access Terminal.")
+    st.info("👈 Sniper is waiting for Login...")
