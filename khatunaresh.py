@@ -7,15 +7,14 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Sniper V16", layout="wide")
-st.title("🎯 MKPV Ultra Sniper Bot")
+st.set_page_config(page_title="GRK Sniper V17", layout="wide")
+st.title("🎯 MKPV Ultra Sniper Bot | Execution Mode")
 
 # -- SESSION STATE --
 if 'connected' not in st.session_state: st.session_state.connected = False
 if 'obj' not in st.session_state: st.session_state.obj = None
 if 'token_df' not in st.session_state: st.session_state.token_df = None
 
-# -- HELPER FUNCTIONS --
 def get_internet_time():
     try:
         r = requests.get("http://worldtimeapi.org/api/timezone/Asia/Kolkata", timeout=5)
@@ -35,6 +34,7 @@ def load_tokens():
 st.sidebar.title("⚙️ Controls")
 index = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 expiry_str = st.sidebar.text_input("Expiry (e.g. 07APR26)", "07APR26").upper()
+qty_multiplier = st.sidebar.number_input("Lots to Buy", min_value=1, value=1)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎯 Risk Management")
@@ -64,6 +64,8 @@ if st.sidebar.button("🔑 Connect"):
 if st.session_state.connected:
     obj = st.session_state.obj
     df = st.session_state.token_df
+    lot_size = 50 if index == "NIFTY" else 15
+    total_qty = lot_size * int(qty_multiplier)
 
     t_name = "Nifty 50" if index=="NIFTY" else "Nifty Bank"
     t_tok = "26000" if index=="NIFTY" else "26009"
@@ -74,11 +76,10 @@ if st.session_state.connected:
         spot = float(res['data']['ltp'])
         atm = int(round(spot / step) * step)
 
-        # UI Layout
         c1, c2, c3 = st.columns(3)
         c1.metric("Spot Price", f"₹{spot}")
         c2.metric("ATM Strike", atm)
-        c3.metric("Status", "LIVE 🟢")
+        c3.metric("Trade Qty", f"{total_qty} units")
         
         # 1. TOKEN SEARCH
         search_prefix = f"{index}{expiry_str}{atm}"
@@ -88,38 +89,54 @@ if st.session_state.connected:
         if not ce_match.empty and not pe_match.empty:
             ce_row, pe_row = ce_match.iloc[0], pe_match.iloc[0]
             
-            ce_res = obj.ltpData("NFO", ce_row['symbol'], ce_row['token'])
-            pe_res = obj.ltpData("NFO", pe_row['symbol'], pe_row['token'])
+            # 💡 LTP FIX: Ensuring token is pure string without decimals
+            ce_tok = str(ce_row['token']).split('.')[0]
+            pe_tok = str(pe_row['token']).split('.')[0]
+            
+            ce_res = obj.ltpData("NFO", ce_row['symbol'], ce_tok)
+            pe_res = obj.ltpData("NFO", pe_row['symbol'], pe_tok)
 
             ce_ltp = float(ce_res['data']['ltp']) if ce_res.get('status') else 0.0
             pe_ltp = float(pe_res['data']['ltp']) if pe_res.get('status') else 0.0
 
-            st.markdown("---")
-            
-            # 📋 2. DATA CHECKLIST
-            st.subheader("📋 System Readiness Checklist")
-            chk1, chk2, chk3, chk4 = st.columns(4)
+            # 📋 2. SYSTEM CHECKLIST
+            st.divider()
+            chk1, chk2, chk3 = st.columns(3)
             chk1.success("✅ Spot Data Active")
-            chk2.success(f"✅ Expiry {expiry_str} Valid")
-            chk3.success(f"✅ CE Token: {ce_row['token']}")
-            chk4.success(f"✅ PE Token: {pe_row['token']}")
-
-            st.markdown("---")
-
-            # 🎯 3. TRADE PLANNER & SAFETY CHECK
-            st.subheader("🎯 Auto Trade Planner")
-            
-            # Simple Trend Logic (Disclaimer: Basic Momentum)
-            if ce_ltp > pe_ltp * 1.2:
-                safe_signal = "🟢 CALL looks stronger (Momentum UP)"
-            elif pe_ltp > ce_ltp * 1.2:
-                safe_signal = "🔴 PUT looks stronger (Momentum DOWN)"
+            chk2.success(f"✅ Exact Tokens Found")
+            if ce_ltp > 0 and pe_ltp > 0:
+                chk3.success("✅ Premium Feeds Active")
             else:
-                safe_signal = "⚖️ Market is Sideways / Indecisive"
+                chk3.error("🚨 Market Closed / Fetching Error")
 
-            st.info(f"**Market Bias (Based on Premium):** {safe_signal}")
+            # 🎯 3. TRADE PLANNER
+            st.subheader("🎯 Auto Trade Planner & Execution")
+            
+            if ce_ltp > pe_ltp * 1.2: safe_signal = "🟢 CALL looks stronger"
+            elif pe_ltp > ce_ltp * 1.2: safe_signal = "🔴 PUT looks stronger"
+            else: safe_signal = "⚖️ Market is Sideways / Indecisive"
+            st.info(f"**Market Bias:** {safe_signal}")
 
-            # Calculation Tables
+            # FUNCTION TO PLACE ORDER
+            def place_buy_order(symbol, token):
+                try:
+                    orderparams = {
+                        "variety": "NORMAL",
+                        "tradingsymbol": symbol,
+                        "symboltoken": str(token),
+                        "transactiontype": "BUY",
+                        "exchange": "NFO",
+                        "ordertype": "MARKET",
+                        "producttype": "INTRADAY",
+                        "duration": "DAY",
+                        "quantity": str(total_qty)
+                    }
+                    orderId = obj.placeOrder(orderparams)
+                    st.success(f"✅ Order Placed! ID: {orderId}")
+                except Exception as e:
+                    st.error(f"❌ Order Failed: {e}")
+
+            # Calculation & Action Tables
             colA, colB = st.columns(2)
             
             with colA:
@@ -127,17 +144,24 @@ if st.session_state.connected:
                 st.metric("Entry Price (LTP)", f"₹{ce_ltp}")
                 st.write(f"**🎯 Target (+{tgt_pct}%):** ₹{round(ce_ltp * (1 + tgt_pct/100), 2)}")
                 st.write(f"**🛡️ Stoploss (-{sl_pct}%):** ₹{round(ce_ltp * (1 - sl_pct/100), 2)}")
+                if ce_ltp > 0:
+                    if st.button("🚀 BUY CALL AT MARKET"):
+                        place_buy_order(ce_row['symbol'], ce_tok)
             
             with colB:
                 st.markdown(f"### 🔴 PUT ({pe_row['symbol']})")
                 st.metric("Entry Price (LTP)", f"₹{pe_ltp}")
                 st.write(f"**🎯 Target (+{tgt_pct}%):** ₹{round(pe_ltp * (1 + tgt_pct/100), 2)}")
                 st.write(f"**🛡️ Stoploss (-{sl_pct}%):** ₹{round(pe_ltp * (1 - sl_pct/100), 2)}")
+                if pe_ltp > 0:
+                    if st.button("🚀 BUY PUT AT MARKET"):
+                        place_buy_order(pe_row['symbol'], pe_tok)
 
         else:
             st.error(f"🚨 Tokens missing for {search_prefix}")
 
-    time.sleep(1.5)
+    time.sleep(2)
     st.rerun()
 else:
     st.info("Enter MPIN and Connect to start the Sniper.")
+    
