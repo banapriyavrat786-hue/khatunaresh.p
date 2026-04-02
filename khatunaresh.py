@@ -8,9 +8,10 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V35", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Strict Data Engine")
+st.set_page_config(page_title="GRK Auto-Sniper V37", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Safe Data Mode")
 
+# -- SESSION STATE --
 if 'connected' not in st.session_state: st.session_state.connected = False
 if 'obj' not in st.session_state: st.session_state.obj = None
 if 'token_df' not in st.session_state: st.session_state.token_df = None
@@ -36,7 +37,7 @@ def load_tokens():
 # -- SIDEBAR CONTROLS --
 st.sidebar.title("⚙️ Robot Controls")
 live_feed = st.sidebar.checkbox("🟢 LIVE FEED (Auto-Refresh)", value=False)
-auto_trade = st.sidebar.checkbox("🤖 Enable Auto-Trade Mode", value=False) # 💡 ISE TICK KARNA ZARURI HAI!
+auto_trade = st.sidebar.checkbox("🤖 Enable Auto-Trade Mode", value=False)
 
 st.sidebar.markdown("---")
 index = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
@@ -96,7 +97,8 @@ if st.session_state.connected:
 
                 if atm_ce_tok and atm_pe_tok:
                     strikes_to_scan = [atm - step*3, atm - step*2, atm - step, atm, atm + step, atm + step*2, atm + step*3]
-                    tokens_list = []
+                    ce_tokens = []
+                    pe_tokens = []
                     strike_map = {}
 
                     for s in strikes_to_scan:
@@ -105,7 +107,8 @@ if st.session_state.connected:
                         if not c_df.empty and not p_df.empty:
                             c_tok = str(c_df.iloc[0]['token']).split('.')[0]
                             p_tok = str(p_df.iloc[0]['token']).split('.')[0]
-                            tokens_list.extend([c_tok, p_tok])
+                            ce_tokens.append(c_tok)
+                            pe_tokens.append(p_tok)
                             strike_map[c_tok] = {'type': 'CE', 'strike': s}
                             strike_map[p_tok] = {'type': 'PE', 'strike': s}
 
@@ -113,30 +116,51 @@ if st.session_state.connected:
                     max_pe_oi, support_strike = 0, atm - (step*3)
                     ce_ltp, pe_ltp, ce_oi, pe_oi, ce_vol, pe_vol = 0.0, 0.0, 0, 0, 0, 0
 
+                    # 💡 V37 FIX: Batched API Calls to prevent 0 OI Error (API Limit/Timeout Protection)
                     try:
-                        m_data = obj.getMarketData("FULL", {"NFO": tokens_list})
-                        if m_data and m_data.get('status'):
-                            for item in m_data['data']['fetched']:
+                        # Fetch CE data
+                        ce_data = obj.getMarketData("FULL", {"NFO": ce_tokens})
+                        if ce_data and ce_data.get('status'):
+                            for item in ce_data['data']['fetched']:
                                 tok = item['symbolToken']
                                 if tok not in strike_map: continue
-                                t_type = strike_map[tok]['type']
                                 t_strike = strike_map[tok]['strike']
                                 
-                                if t_type == 'CE' and t_strike >= atm:
-                                    if item['opnInterest'] > max_ce_oi:
-                                        max_ce_oi = item['opnInterest']
-                                        resistance_strike = t_strike
-                                elif t_type == 'PE' and t_strike <= atm:
-                                    if item['opnInterest'] > max_pe_oi:
-                                        max_pe_oi = item['opnInterest']
-                                        support_strike = t_strike
+                                if t_strike >= atm and item['opnInterest'] > max_ce_oi:
+                                    max_ce_oi = item['opnInterest']
+                                    resistance_strike = t_strike
 
                                 if t_strike == atm:
-                                    if t_type == 'CE':
-                                        ce_ltp, ce_oi, ce_vol = item['lastTradedPrice'], item['opnInterest'], item['volume']
-                                    else:
-                                        pe_ltp, pe_oi, pe_vol = item['lastTradedPrice'], item['opnInterest'], item['volume']
-                    except: pass
+                                    ce_ltp = item.get('lastTradedPrice', 0.0)
+                                    ce_oi = item.get('opnInterest', 0)
+                                    ce_vol = item.get('volume', 0)
+                                    
+                        # Small delay to respect Angel One rate limits
+                        time.sleep(0.5)
+                        
+                        # Fetch PE data
+                        pe_data = obj.getMarketData("FULL", {"NFO": pe_tokens})
+                        if pe_data and pe_data.get('status'):
+                            for item in pe_data['data']['fetched']:
+                                tok = item['symbolToken']
+                                if tok not in strike_map: continue
+                                t_strike = strike_map[tok]['strike']
+
+                                if t_strike <= atm and item['opnInterest'] > max_pe_oi:
+                                    max_pe_oi = item['opnInterest']
+                                    support_strike = t_strike
+
+                                if t_strike == atm:
+                                    pe_ltp = item.get('lastTradedPrice', 0.0)
+                                    pe_oi = item.get('opnInterest', 0)
+                                    pe_vol = item.get('volume', 0)
+                                    
+                    except Exception as e: 
+                        st.error(f"Market Data Fetch Error: {e}")
+
+                    # DIAGNOSTIC PRINT: Agar 0 aa raha hai, toh screen pe saaf dikhega kyon!
+                    if ce_oi == 0 or pe_oi == 0:
+                        st.warning(f"⚠️ Angel One API returned zero OI for ATM Strike ({atm}). Waiting for next refresh...")
 
                     market_state = "Sideways / Conflicting ⚖️"
                     if spot > sma and pe_oi > ce_oi: market_state = "Bullish Trending 📈"
@@ -151,12 +175,11 @@ if st.session_state.connected:
 
                     st.divider()
 
-                    # 💡 V35 FIX: STRICT OI & VOLUME LOGIC (NO FREE PASS)
+                    # 💡 V37 LOGIC EVALUATION
                     valid_data = (ce_oi > 0 and pe_oi > 0 and ce_vol > 0 and pe_vol > 0)
                     
                     c_price = spot > sma
                     c_mom = ce_ltp > pe_ltp
-                    
                     p_price = spot < sma
                     p_mom = pe_ltp > ce_ltp
 
@@ -166,7 +189,6 @@ if st.session_state.connected:
                         p_oi = (ce_oi > pe_oi)
                         p_vol = (ce_vol > pe_vol)
                     else:
-                        # Data is missing, do NOT pass them!
                         c_oi = c_vol = p_oi = p_vol = False
 
                     ce_score = sum([c_price, c_mom, c_oi, c_vol])
@@ -193,7 +215,7 @@ if st.session_state.connected:
                             st.rerun()
 
                     # 📋 2. SNIPER ENTRY CHECKLIST UI
-                    def check_icon(val): return "✅" if val else ("⚠️ Pending" if not valid_data else "❌")
+                    def check_icon(val): return "✅" if val else ("⚠️ Data Pending" if not valid_data else "❌")
 
                     st.subheader("📋 Strict Sniper Checklist")
                     col_a, col_b = st.columns(2)
@@ -215,25 +237,27 @@ if st.session_state.connected:
                     # 🚀 3. TRADE EXECUTION / MONITORING
                     if st.session_state.active_trade is None:
                         if auto_trade:
-                            st.info("🤖 Auto-Trade ENABLED: Waiting for 75% setup...")
+                            st.info("🤖 Auto-Trade ENABLED: Waiting for 75% setup (Data must be valid)...")
                             target_sym = f"{search_prefix}{atm}"
                             curr_time = datetime.now().strftime("%H:%M:%S")
                             
-                            if ce_safety >= 75.0 and c_price and ce_ltp > 0:
-                                try:
-                                    order_id = obj.placeOrder({"variety":"NORMAL", "tradingsymbol":f"{target_sym}CE", "symboltoken":atm_ce_tok, "transactiontype":"BUY", "exchange":"NFO", "ordertype":"MARKET", "producttype":"INTRADAY", "duration":"DAY", "quantity":str(total_qty)})
-                                    if order_id:
-                                        st.session_state.active_trade = {'type': 'CE', 'symbol': f"{target_sym}CE", 'entry_spot': float(spot), 'target_spot': float(spot + tgt_points), 'sl_spot': float(spot - sl_points), 'time': curr_time}
-                                        st.success(f"🤖 BOUGHT CALL! Order ID: {order_id}")
-                                except Exception as e: st.error(f"❌ Order Failed: {e}") 
+                            # MUST HAVE VALID OI/VOL DATA TO EXECUTE
+                            if valid_data:
+                                if ce_safety >= 75.0 and c_price and ce_ltp > 0:
+                                    try:
+                                        order_id = obj.placeOrder({"variety":"NORMAL", "tradingsymbol":f"{target_sym}CE", "symboltoken":atm_ce_tok, "transactiontype":"BUY", "exchange":"NFO", "ordertype":"MARKET", "producttype":"INTRADAY", "duration":"DAY", "quantity":str(total_qty)})
+                                        if order_id:
+                                            st.session_state.active_trade = {'type': 'CE', 'symbol': f"{target_sym}CE", 'entry_spot': float(spot), 'target_spot': float(spot + tgt_points), 'sl_spot': float(spot - sl_points), 'time': curr_time}
+                                            st.success(f"🤖 BOUGHT CALL! Order ID: {order_id}")
+                                    except Exception as e: st.error(f"❌ Order Failed: {e}") 
 
-                            elif pe_safety >= 75.0 and p_price and pe_ltp > 0:
-                                try:
-                                    order_id = obj.placeOrder({"variety":"NORMAL", "tradingsymbol":f"{target_sym}PE", "symboltoken":atm_pe_tok, "transactiontype":"BUY", "exchange":"NFO", "ordertype":"MARKET", "producttype":"INTRADAY", "duration":"DAY", "quantity":str(total_qty)})
-                                    if order_id:
-                                        st.session_state.active_trade = {'type': 'PE', 'symbol': f"{target_sym}PE", 'entry_spot': float(spot), 'target_spot': float(spot - tgt_points), 'sl_spot': float(spot + sl_points), 'time': curr_time}
-                                        st.success(f"🤖 BOUGHT PUT! Order ID: {order_id}")
-                                except Exception as e: st.error(f"❌ Order Failed: {e}")
+                                elif pe_safety >= 75.0 and p_price and pe_ltp > 0:
+                                    try:
+                                        order_id = obj.placeOrder({"variety":"NORMAL", "tradingsymbol":f"{target_sym}PE", "symboltoken":atm_pe_tok, "transactiontype":"BUY", "exchange":"NFO", "ordertype":"MARKET", "producttype":"INTRADAY", "duration":"DAY", "quantity":str(total_qty)})
+                                        if order_id:
+                                            st.session_state.active_trade = {'type': 'PE', 'symbol': f"{target_sym}PE", 'entry_spot': float(spot), 'target_spot': float(spot - tgt_points), 'sl_spot': float(spot + sl_points), 'time': curr_time}
+                                            st.success(f"🤖 BOUGHT PUT! Order ID: {order_id}")
+                                    except Exception as e: st.error(f"❌ Order Failed: {e}")
                         else:
                             st.warning("⚠️ Auto-Trade is OFF. Tick 'Enable Auto-Trade Mode' in the sidebar.")
                     else:
@@ -263,7 +287,7 @@ if st.session_state.connected:
         except Exception as e:
             st.error(f"🚨 Logic Error: {e}")
             
-        time.sleep(2)
+        time.sleep(3)
         st.rerun()
     else:
         st.info("⏸️ Live Feed is PAUSED.")
