@@ -8,8 +8,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V40", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | The Final Engine")
+st.set_page_config(page_title="GRK Auto-Sniper V42", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Live Data Feed Mode")
 
 # -- SESSION STATE INITIALIZATION --
 for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'last_valid_data']:
@@ -104,12 +104,14 @@ if st.session_state.connected:
                 except:
                     ce_tok, pe_tok = "", ""
 
-                # 2. MEMORY ENGINE (Load Last Valid Data)
+                # 2. MEMORY ENGINE
                 ce_oi = st.session_state.last_valid_data['ce_oi']
                 pe_oi = st.session_state.last_valid_data['pe_oi']
                 ce_vol = st.session_state.last_valid_data['ce_vol']
                 pe_vol = st.session_state.last_valid_data['pe_vol']
                 ce_ltp = pe_ltp = 0.0
+                max_ce_oi, resistance_strike = 0, atm + (step*3) 
+                max_pe_oi, support_strike = 0, atm - (step*3)
 
                 if ce_tok and pe_tok:
                     try:
@@ -118,7 +120,6 @@ if st.session_state.connected:
                             for item in md['data']['fetched']:
                                 tok = item['symbolToken']
                                 fetched_oi = item.get('opnInterest', 0)
-                                # 💡 Smart Volume Check: Tries 'volume' first, falls back to 'tradeVolume'
                                 fetched_vol = item.get('volume', item.get('tradeVolume', 0))
                                 fetched_ltp = item.get('lastTradedPrice', 0.0)
 
@@ -177,7 +178,11 @@ if st.session_state.connected:
                         st.rerun()
 
                 # 5. UI DASHBOARD
-                st.subheader("📊 Market Condition")
+                market_state = "Sideways / Conflicting ⚖️"
+                if spot > sma and pe_oi > ce_oi: market_state = "Bullish Trending 📈"
+                elif spot < sma and ce_oi > pe_oi: market_state = "Bearish Trending 📉"
+
+                st.subheader(f"📊 Market Condition: {market_state} (ATM: {atm})")
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Live Index (Spot)", f"₹{spot}")
                 c2.metric("Trend (SMA)", f"₹{round(sma, 2)}")
@@ -186,7 +191,40 @@ if st.session_state.connected:
 
                 st.divider()
 
-                # 6. AUTO-TRADE ENTRY
+                # 💡 V42 NAYA FEATURE: LIVE OI & VOLUME DATA FEED 
+                st.subheader("🔍 Live ATM Data Feed (Option Writers)")
+                if valid:
+                    d1, d2, d3, d4 = st.columns(4)
+                    d1.metric(label="Call Sellers OI (CE OI)", value=f"{ce_oi:,}")
+                    d2.metric(label="Put Sellers OI (PE OI)", value=f"{pe_oi:,}")
+                    d3.metric(label="Call Volume (CE Vol)", value=f"{ce_vol:,}")
+                    d4.metric(label="Put Volume (PE Vol)", value=f"{pe_vol:,}")
+                else:
+                    st.warning("⚠️ API Data Pending/Zero. Using last known data in memory...")
+
+                st.divider()
+
+                # 6. CHECKLIST RESTORED
+                def check_icon(val): return "✅" if val else ("⚠️ Pending" if not valid else "❌")
+
+                st.subheader("📋 Strict Sniper Checklist")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.markdown(f"### 🟢 CALL Sniper ({ce_safe}%)")
+                    st.write(f"Trend UP (Spot > SMA): {'✅' if c_price else '❌'}")
+                    st.write(f"Momentum (CE > PE): {'✅' if c_mom else '❌'}")
+                    st.write(f"Support Strong (PE OI > CE OI): {check_icon(c_oi)}")
+                    st.write(f"Put Writers Active (PE Vol > CE Vol): {check_icon(c_vol)}")
+                with col_b:
+                    st.markdown(f"### 🔴 PUT Sniper ({pe_safe}%)")
+                    st.write(f"Trend DOWN (Spot < SMA): {'✅' if p_price else '❌'}")
+                    st.write(f"Momentum (PE > CE): {'✅' if p_mom else '❌'}")
+                    st.write(f"Resistance Strong (CE OI > PE OI): {check_icon(p_oi)}")
+                    st.write(f"Call Writers Active (CE Vol > PE Vol): {check_icon(p_vol)}")
+
+                st.divider()
+
+                # 7. AUTO-TRADE ENTRY
                 if st.session_state.active_trade is None:
                     if auto_trade and valid:
                         st.info("🤖 Scanning for 75% Setup...")
@@ -224,7 +262,7 @@ if st.session_state.connected:
                         st.session_state.active_trade = None
                         st.rerun()
 
-            # 7. HISTORY LEDGER
+            # 8. HISTORY LEDGER
             if st.session_state.trade_history:
                 st.divider()
                 st.subheader("📚 Today's Trade History Ledger")
@@ -237,7 +275,4 @@ if st.session_state.connected:
         st.rerun()
     else:
         st.info("⏸️ Live Feed is PAUSED.")
-        if st.session_state.trade_history:
-            st.dataframe(pd.DataFrame(st.session_state.trade_history), use_container_width=True)
-else:
-    st.info("Enter MPIN and Connect.")
+        if
