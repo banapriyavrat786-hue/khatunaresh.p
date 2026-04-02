@@ -1,14 +1,15 @@
 import streamlit as st
 from SmartApi import SmartConnect
 import pyotp, pandas as pd, requests, time
+from datetime import datetime
 
 # -- CONFIGURATION --
 FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V33", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Unbreakable Engine")
+st.set_page_config(page_title="GRK Auto-Sniper V34", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Advanced Ledger Mode")
 
 # -- SESSION STATE --
 if 'connected' not in st.session_state: st.session_state.connected = False
@@ -47,12 +48,14 @@ index = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 expiry_str = st.sidebar.text_input("Expiry (e.g. 07APR26)", "07APR26").upper()
 qty_multiplier = st.sidebar.number_input("Lots", min_value=1, value=1)
 
-st.sidebar.subheader("🎯 Spot Target & SL")
-tgt_points = st.sidebar.number_input("Target Points", value=40)
-sl_points = st.sidebar.number_input("StopLoss Points", value=20)
+st.sidebar.subheader("🎯 Spot Index Targets")
+tgt_points = st.sidebar.number_input("Target Points", value=40.0, step=5.0)
+sl_points = st.sidebar.number_input("StopLoss Points", value=20.0, step=5.0)
 mpin = st.sidebar.text_input("MPIN", type="password", max_chars=4)
 
 if st.sidebar.button("🔑 Connect"):
+    # 💡 Safety: Clear old buggy states on fresh connect
+    st.session_state.active_trade = None 
     st.session_state.token_df = load_tokens() 
     if st.session_state.token_df is not None:
         otp = pyotp.TOTP(TOTP_SECRET.strip().replace(" ", "")).at(get_internet_time())
@@ -94,7 +97,6 @@ if st.session_state.connected:
                 atm = int(round(spot / step) * step)
                 search_prefix = f"{index}{expiry_str}"
 
-                # 💡 THE ULTIMATE FIX: Hard-Extract ATM Tokens Immediately
                 try:
                     atm_ce_row = df[df['symbol'] == f"{search_prefix}{atm}CE"].iloc[0]
                     atm_pe_row = df[df['symbol'] == f"{search_prefix}{atm}PE"].iloc[0]
@@ -178,22 +180,44 @@ if st.session_state.connected:
                     ce_safety = (ce_score / 4) * 100
                     pe_safety = (pe_score / 4) * 100
 
+                    # 🚀 1. EVALUATE EXITS FIRST
                     if st.session_state.active_trade is not None:
                         trade = st.session_state.active_trade
-                        pnl_spot = round(spot - trade['entry_spot'] if trade['type'] == 'CE' else trade['entry_spot'] - spot, 2)
                         
-                        is_exit = False
-                        if trade['type'] == 'CE' and (spot >= trade['target_spot'] or spot <= trade['sl_spot']): is_exit = True
-                        if trade['type'] == 'PE' and (spot <= trade['target_spot'] or spot >= trade['sl_spot']): is_exit = True
+                        # Calculate Live P&L based on Spot Price Movement
+                        if trade['type'] == 'CE':
+                            pnl_spot = round(spot - trade['entry_spot'], 2)
+                            is_target = spot >= trade['target_spot']
+                            is_sl = spot <= trade['sl_spot']
+                        else:
+                            pnl_spot = round(trade['entry_spot'] - spot, 2)
+                            is_target = spot <= trade['target_spot']
+                            is_sl = spot >= trade['sl_spot']
+
+                        is_exit = is_target or is_sl
 
                         if is_exit:
-                            res_msg = "✅ Target" if pnl_spot > 0 else "❌ Stoploss"
-                            st.session_state.trade_history.append({"Trade": trade['symbol'], "Spot P&L": pnl_spot, "Result": res_msg})
+                            res_msg = "✅ Target Hit" if is_target else "❌ StopLoss Hit"
+                            exit_time = datetime.now().strftime("%H:%M:%S")
+                            
+                            # 💡 APPENDING TO TRADE HISTORY LEDGER
+                            st.session_state.trade_history.append({
+                                "Time": exit_time,
+                                "Symbol": trade['symbol'],
+                                "Type": trade['type'],
+                                "Entry (Spot)": trade['entry_spot'],
+                                "Exit (Spot)": round(spot, 2),
+                                "Target Level": trade['target_spot'],
+                                "SL Level": trade['sl_spot'],
+                                "P&L (Pts)": pnl_spot,
+                                "Status": res_msg
+                            })
                             st.session_state.active_trade = None
                             st.success(f"⚡ Trade Auto-Closed: {res_msg} Triggered at {spot}!")
                             time.sleep(1)
                             st.rerun()
 
+                    # 📋 2. SNIPER ENTRY CHECKLIST
                     st.subheader("📋 Sniper Entry Checklist")
                     col_a, col_b = st.columns(2)
                     with col_a:
@@ -211,17 +235,26 @@ if st.session_state.connected:
 
                     st.divider()
 
+                    # 🚀 3. TRADE EXECUTION / MONITORING
                     if st.session_state.active_trade is None:
                         if auto_trade:
                             st.info("🤖 Scanning for 75% Safety Setup (Trend Must Align)...")
                             target_sym = f"{search_prefix}{atm}"
+                            curr_time = datetime.now().strftime("%H:%M:%S")
                             
-                            # 💡 FIXED: Uses globally assigned atm_ce_tok safely
+                            # 💡 FIXED None BUG: Forced all values to be explicitly calculated as floats
                             if ce_safety >= 75.0 and c_price and ce_ltp > 0:
                                 try:
                                     order_id = obj.placeOrder({"variety":"NORMAL", "tradingsymbol":f"{target_sym}CE", "symboltoken":atm_ce_tok, "transactiontype":"BUY", "exchange":"NFO", "ordertype":"MARKET", "producttype":"INTRADAY", "duration":"DAY", "quantity":str(total_qty)})
                                     if order_id:
-                                        st.session_state.active_trade = {'type':'CE', 'entry_spot':spot, 'target_spot':spot+tgt_points, 'sl_spot':spot-sl_points, 'symbol':f"{target_sym}CE"}
+                                        st.session_state.active_trade = {
+                                            'type': 'CE', 
+                                            'symbol': f"{target_sym}CE",
+                                            'entry_spot': float(spot), 
+                                            'target_spot': float(spot + tgt_points), 
+                                            'sl_spot': float(spot - sl_points),
+                                            'time': curr_time
+                                        }
                                         st.success(f"🤖 Auto-Trade: BOUGHT CALL! Order ID: {order_id}")
                                 except Exception as e: st.error(f"❌ Order Failed: {e}") 
 
@@ -229,21 +262,73 @@ if st.session_state.connected:
                                 try:
                                     order_id = obj.placeOrder({"variety":"NORMAL", "tradingsymbol":f"{target_sym}PE", "symboltoken":atm_pe_tok, "transactiontype":"BUY", "exchange":"NFO", "ordertype":"MARKET", "producttype":"INTRADAY", "duration":"DAY", "quantity":str(total_qty)})
                                     if order_id:
-                                        st.session_state.active_trade = {'type':'PE', 'entry_spot':spot, 'target_spot':spot-tgt_points, 'sl_spot':spot+sl_points, 'symbol':f"{target_sym}PE"}
+                                        st.session_state.active_trade = {
+                                            'type': 'PE', 
+                                            'symbol': f"{target_sym}PE",
+                                            'entry_spot': float(spot), 
+                                            'target_spot': float(spot - tgt_points), 
+                                            'sl_spot': float(spot + sl_points),
+                                            'time': curr_time
+                                        }
                                         st.success(f"🤖 Auto-Trade: BOUGHT PUT! Order ID: {order_id}")
                                 except Exception as e: st.error(f"❌ Order Failed: {e}")
                         else:
                             st.warning("⚠️ Auto-Trade is OFF. Enable it from the sidebar.")
                     else:
                         trade = st.session_state.active_trade
-                        pnl_spot = round(spot - trade['entry_spot'] if trade['type'] == 'CE' else trade['entry_spot'] - spot, 2)
-                        st.warning(f"🚀 ACTIVE TRADE: {trade['symbol']} | Live Index P&L: {pnl_spot} Pts")
-                        st.write(f"**Spot Entry:** ₹{trade['entry_spot']} | **Target:** ₹{trade['target_spot']} | **StopLoss:** ₹{trade['sl_spot']}")
                         
-                        if st.button("🚨 MANUAL EXIT NOW"):
-                            st.session_state.trade_history.append({"Trade": trade['symbol'], "Spot P&L": pnl_spot, "Result": "⚠️ Manual"})
+                        # Displaying Spot-based Live P&L
+                        if trade['type'] == 'CE':
+                            pnl_spot = round(spot - trade['entry_spot'], 2)
+                        else:
+                            pnl_spot = round(trade['entry_spot'] - spot, 2)
+                            
+                        st.info(f"🚀 **ACTIVE {trade['type']} TRADE** ({trade['symbol']}) | Entered at {trade.get('time', '--:--')}")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Live Index (Spot)", f"₹{spot}")
+                        col2.metric("Spot Entry", f"₹{trade['entry_spot']}")
+                        col3.metric("Target Level", f"₹{trade['target_spot']}")
+                        col4.metric("StopLoss Level", f"₹{trade['sl_spot']}")
+                        
+                        st.metric(label="Live P&L (Index Points Captured)", value=f"{pnl_spot} Pts", delta=pnl_spot)
+                        
+                        if st.button("🚨 MANUAL EXIT NOW", use_container_width=True):
+                            exit_time = datetime.now().strftime("%H:%M:%S")
+                            st.session_state.trade_history.append({
+                                "Time": exit_time,
+                                "Symbol": trade['symbol'],
+                                "Type": trade['type'],
+                                "Entry (Spot)": trade['entry_spot'],
+                                "Exit (Spot)": round(spot, 2),
+                                "Target Level": trade['target_spot'],
+                                "SL Level": trade['sl_spot'],
+                                "P&L (Pts)": pnl_spot,
+                                "Status": "⚠️ Manual Exit"
+                            })
                             st.session_state.active_trade = None
                             st.rerun()
+
+            # 📚 4. SHOW TRADE HISTORY
+            if st.session_state.trade_history:
+                st.divider()
+                st.subheader("📚 Today's Trade History Ledger")
+                hist_df = pd.DataFrame(st.session_state.trade_history)
+                st.dataframe(hist_df, use_container_width=True)
+                
+                # Summary Stats
+                total_trades = len(hist_df)
+                total_tgt_hits = len(hist_df[hist_df['Status'] == "✅ Target Hit"])
+                total_sl_hits = len(hist_df[hist_df['Status'] == "❌ StopLoss Hit"])
+                net_pnl = round(hist_df['P&L (Pts)'].sum(), 2)
+                
+                sum1, sum2, sum3, sum4 = st.columns(4)
+                sum1.metric("Total Trades", total_trades)
+                sum2.metric("Targets Hit ✅", total_tgt_hits)
+                sum3.metric("StopLoss Hit ❌", total_sl_hits)
+                sum4.metric("Net P&L (Points)", f"{net_pnl} Pts", delta=net_pnl)
+            else:
+                st.write("No trades executed yet.")
 
         except Exception as e:
             st.error(f"🚨 Safe Error Catch: {e}")
@@ -254,7 +339,20 @@ if st.session_state.connected:
         st.info("⏸️ Live Feed is PAUSED. Tick '🟢 LIVE FEED' from sidebar to start tracking.")
         if st.session_state.trade_history:
             st.divider()
-            st.subheader("📚 Today's Trade History")
-            st.table(pd.DataFrame(st.session_state.trade_history))
+            st.subheader("📚 Today's Trade History Ledger")
+            hist_df = pd.DataFrame(st.session_state.trade_history)
+            st.dataframe(hist_df, use_container_width=True)
+            
+            # Summary Stats
+            total_trades = len(hist_df)
+            total_tgt_hits = len(hist_df[hist_df['Status'] == "✅ Target Hit"])
+            total_sl_hits = len(hist_df[hist_df['Status'] == "❌ StopLoss Hit"])
+            net_pnl = round(hist_df['P&L (Pts)'].sum(), 2)
+            
+            sum1, sum2, sum3, sum4 = st.columns(4)
+            sum1.metric("Total Trades", total_trades)
+            sum2.metric("Targets Hit ✅", total_tgt_hits)
+            sum3.metric("StopLoss Hit ❌", total_sl_hits)
+            sum4.metric("Net P&L (Points)", f"{net_pnl} Pts", delta=net_pnl)
 else:
     st.info("Enter MPIN and Connect to start the Sniper.")
