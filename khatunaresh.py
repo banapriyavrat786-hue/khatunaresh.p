@@ -7,8 +7,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V28", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Flawless Execution")
+st.set_page_config(page_title="GRK Auto-Sniper V29", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Perfect OI & Volume Engine")
 
 # -- SESSION STATE --
 if 'connected' not in st.session_state: st.session_state.connected = False
@@ -43,7 +43,7 @@ index = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 expiry_str = st.sidebar.text_input("Expiry (e.g. 07APR26)", "07APR26").upper()
 qty_multiplier = st.sidebar.number_input("Lots", min_value=1, value=1)
 
-st.sidebar.subheader("🎯 Target & StopLoss (Spot Points)")
+st.sidebar.subheader("🎯 Spot Index Targets")
 tgt_points = st.sidebar.number_input("Target Points", value=40)
 sl_points = st.sidebar.number_input("StopLoss Points", value=20)
 mpin = st.sidebar.text_input("MPIN", type="password", max_chars=4)
@@ -65,6 +65,7 @@ if st.session_state.connected:
         df = st.session_state.token_df
         lot_size = 50 if index == "NIFTY" else 15
         total_qty = lot_size * int(qty_multiplier)
+        step = 50 if index=="NIFTY" else 100
 
         # 1. LIVE SPOT FETCH
         t_name = "Nifty 50" if index=="NIFTY" else "Nifty Bank"
@@ -76,16 +77,14 @@ if st.session_state.connected:
             st.session_state.price_history.append(spot)
             if len(st.session_state.price_history) > 10: st.session_state.price_history.pop(0)
             sma = round(sum(st.session_state.price_history) / len(st.session_state.price_history), 2)
-            step = 50 if index=="NIFTY" else 100
             atm = int(round(spot / step) * step)
 
-            # 2. FETCH TOKENS FOR ATM AND NEARBY STRIKES
+            # 2. BROAD SCAN FOR PERFECT SUPPORT & RESISTANCE (7 Strikes)
             search_prefix = f"{index}{expiry_str}"
-            strikes_to_scan = [atm - step, atm, atm + step]
+            strikes_to_scan = [atm - step*3, atm - step*2, atm - step, atm, atm + step, atm + step*2, atm + step*3]
             tokens_list = []
             strike_map = {}
 
-            # Build list of tokens to fetch OI for Support/Resistance
             for s in strikes_to_scan:
                 c_df = df[df['symbol'] == f"{search_prefix}{s}CE"]
                 p_df = df[df['symbol'] == f"{search_prefix}{s}PE"]
@@ -110,7 +109,7 @@ if st.session_state.connected:
                         t_type = strike_map[tok]['type']
                         t_strike = strike_map[tok]['strike']
                         
-                        # Find S/R using Max OI
+                        # Find Real Resistance (Max Call Writers) and Support (Max Put Writers)
                         if t_type == 'CE' and item['opnInterest'] > max_ce_oi:
                             max_ce_oi = item['opnInterest']
                             resistance_strike = t_strike
@@ -118,7 +117,7 @@ if st.session_state.connected:
                             max_pe_oi = item['opnInterest']
                             support_strike = t_strike
 
-                        # Save ATM specific data for Checklist
+                        # Save ATM specific data
                         if t_strike == atm:
                             if t_type == 'CE':
                                 ce_ltp, ce_oi, ce_vol = item['lastTradedPrice'], item['opnInterest'], item['volume']
@@ -127,33 +126,35 @@ if st.session_state.connected:
                                 pe_ltp, pe_oi, pe_vol = item['lastTradedPrice'], item['opnInterest'], item['volume']
                                 atm_pe_tok = tok
             except Exception as e:
-                st.warning("⚠️ Fetching Market Data...")
+                st.warning("⚠️ Syncing OI Data...")
 
             # 📊 DASHBOARD METRICS
-            st.subheader(f"📊 Market Overview (ATM: {atm})")
+            st.subheader(f"📊 Live Market Overview")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Live Index (Spot)", f"₹{spot}")
             c2.metric("Trend (SMA)", f"₹{sma}")
-            c3.metric("Resistance (High CE OI)", f"Strike: {resistance_strike}")
-            c4.metric("Support (High PE OI)", f"Strike: {support_strike}")
+            c3.metric("Strong Resistance (CE OI)", f"Strike: {resistance_strike}")
+            c4.metric("Strong Support (PE OI)", f"Strike: {support_strike}")
 
             st.divider()
 
-            # 📋 4. STRICT CHECKLIST LOGIC (With 0 Error Handling)
-            st.subheader("📋 Trade Confirmation Checklist")
+            # 📋 4. FIXED SELLER-LOGIC CHECKLIST
+            st.subheader("📋 Strict Trade Logic (Option Seller Perspective)")
             
-            # 💡 Agar Angel One api 0 Volume bheje, toh us logic ko skip karke price action ko priority do
-            valid_oi_vol = (ce_oi > 0 and pe_oi > 0)
+            # Error checking so 0 doesn't crash the logic
+            valid_data = (ce_oi > 0 and pe_oi > 0 and ce_vol > 0 and pe_vol > 0)
             
+            # CALL LOGIC (Bullish): We want Strong Support (PE Writers > CE Writers)
             c_price = spot > sma
             c_mom = ce_ltp > pe_ltp
-            c_oi = (ce_oi > pe_oi) if valid_oi_vol else True
-            c_vol = (ce_vol > pe_vol) if valid_oi_vol else True
+            c_oi = (pe_oi > ce_oi) if valid_data else True    # FIX: PE OI > CE OI indicates strong support
+            c_vol = (pe_vol > ce_vol) if valid_data else True # FIX: High Put writing activity
 
+            # PUT LOGIC (Bearish): We want Strong Resistance (CE Writers > PE Writers)
             p_price = spot < sma
             p_mom = pe_ltp > ce_ltp
-            p_oi = (pe_oi > ce_oi) if valid_oi_vol else True
-            p_vol = (pe_vol > ce_vol) if valid_oi_vol else True
+            p_oi = (ce_oi > pe_oi) if valid_data else True    # FIX: CE OI > PE OI indicates strong resistance
+            p_vol = (ce_vol > pe_vol) if valid_data else True # FIX: High Call writing activity
 
             ce_score = sum([c_price, c_mom, c_oi, c_vol])
             pe_score = sum([p_price, p_mom, p_oi, p_vol])
@@ -165,21 +166,21 @@ if st.session_state.connected:
                 st.markdown(f"### 🟢 CALL Sniper ({ce_safety}%)")
                 st.write(f"Trend UP (Spot > SMA): {'✅' if c_price else '❌'}")
                 st.write(f"Momentum (CE > PE): {'✅' if c_mom else '❌'}")
-                st.write(f"OI Bias (CE > PE): {'✅' if c_oi else '❌'}")
-                st.write(f"Volume (CE > PE): {'✅' if c_vol else '❌'}")
+                st.write(f"Support Strong (PE OI > CE OI): {'✅' if c_oi else '❌'}")
+                st.write(f"Put Writers Active (PE Vol > CE Vol): {'✅' if c_vol else '❌'}")
             with col_b:
                 st.markdown(f"### 🔴 PUT Sniper ({pe_safety}%)")
                 st.write(f"Trend DOWN (Spot < SMA): {'✅' if p_price else '❌'}")
                 st.write(f"Momentum (PE > CE): {'✅' if p_mom else '❌'}")
-                st.write(f"OI Bias (PE > CE): {'✅' if p_oi else '❌'}")
-                st.write(f"Volume (PE > CE): {'✅' if p_vol else '❌'}")
+                st.write(f"Resistance Strong (CE OI > PE OI): {'✅' if p_oi else '❌'}")
+                st.write(f"Call Writers Active (CE Vol > PE Vol): {'✅' if p_vol else '❌'}")
 
             st.divider()
 
-            # 🚀 5. AUTO-TRADE EXECUTION (With Error Catching)
+            # 🚀 5. AUTO-TRADE EXECUTION
             if st.session_state.active_trade is None:
-                st.info("⏳ Waiting for 75% Safety Setup...")
                 if auto_trade:
+                    st.info("🤖 Scanning for 75% Safety Setup...")
                     target_sym = f"{search_prefix}{atm}"
                     
                     if ce_safety >= 75.0 and ce_ltp > 0:
@@ -189,7 +190,7 @@ if st.session_state.connected:
                                 st.session_state.active_trade = {'type':'CE', 'entry_spot':spot, 'target_spot':spot+tgt_points, 'sl_spot':spot-sl_points, 'symbol':f"{target_sym}CE"}
                                 st.success(f"🤖 Auto-Trade: BOUGHT CALL! (Order ID: {order_id})")
                         except Exception as e:
-                            st.error(f"❌ Order Failed: {e}") # 💡 Ab agar order reject hoga toh reason dikhega
+                            st.error(f"❌ Order Failed: {e}") 
 
                     elif pe_safety >= 75.0 and pe_ltp > 0:
                         try:
@@ -199,6 +200,8 @@ if st.session_state.connected:
                                 st.success(f"🤖 Auto-Trade: BOUGHT PUT! (Order ID: {order_id})")
                         except Exception as e:
                             st.error(f"❌ Order Failed: {e}")
+                else:
+                    st.warning("⚠️ Auto-Trade is OFF. Enable it from the sidebar to take positions.")
 
             # 📊 6. MONITORING & EXIT
             else:
@@ -218,7 +221,7 @@ if st.session_state.connected:
                     st.session_state.active_trade = None
 
         except Exception as e:
-            st.error(f"Data Syncing... {e}")
+            st.error(f"Waiting for Data Sync... {e}")
         
         time.sleep(2)
         st.rerun()
