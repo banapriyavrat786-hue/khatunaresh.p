@@ -8,8 +8,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V37", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Safe Data Mode")
+st.set_page_config(page_title="GRK Auto-Sniper V38", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Memory Engine Mode")
 
 # -- SESSION STATE --
 if 'connected' not in st.session_state: st.session_state.connected = False
@@ -18,6 +18,10 @@ if 'token_df' not in st.session_state: st.session_state.token_df = None
 if 'active_trade' not in st.session_state: st.session_state.active_trade = None
 if 'trade_history' not in st.session_state: st.session_state.trade_history = []
 if 'price_history' not in st.session_state: st.session_state.price_history = []
+
+# 💡 V38 NAYA FEATURE: Memory State for Dropped API Packets
+if 'last_valid_data' not in st.session_state: 
+    st.session_state.last_valid_data = {'ce_oi': 0, 'pe_oi': 0, 'ce_vol': 0, 'pe_vol': 0}
 
 def get_internet_time():
     try:
@@ -114,9 +118,15 @@ if st.session_state.connected:
 
                     max_ce_oi, resistance_strike = 0, atm + (step*3) 
                     max_pe_oi, support_strike = 0, atm - (step*3)
-                    ce_ltp, pe_ltp, ce_oi, pe_oi, ce_vol, pe_vol = 0.0, 0.0, 0, 0, 0, 0
+                    
+                    ce_ltp, pe_ltp = 0.0, 0.0
+                    
+                    # 💡 V38 FIX: Memory Engine (Load last known good values)
+                    ce_oi = st.session_state.last_valid_data['ce_oi']
+                    ce_vol = st.session_state.last_valid_data['ce_vol']
+                    pe_oi = st.session_state.last_valid_data['pe_oi']
+                    pe_vol = st.session_state.last_valid_data['pe_vol']
 
-                    # 💡 V37 FIX: Batched API Calls to prevent 0 OI Error (API Limit/Timeout Protection)
                     try:
                         # Fetch CE data
                         ce_data = obj.getMarketData("FULL", {"NFO": ce_tokens})
@@ -132,11 +142,18 @@ if st.session_state.connected:
 
                                 if t_strike == atm:
                                     ce_ltp = item.get('lastTradedPrice', 0.0)
-                                    ce_oi = item.get('opnInterest', 0)
-                                    ce_vol = item.get('volume', 0)
+                                    fetched_oi = item.get('opnInterest', 0)
+                                    fetched_vol = item.get('volume', 0)
                                     
-                        # Small delay to respect Angel One rate limits
-                        time.sleep(0.5)
+                                    # 💡 Update Memory only if API sent real data
+                                    if fetched_oi > 0:
+                                        ce_oi = fetched_oi
+                                        st.session_state.last_valid_data['ce_oi'] = fetched_oi
+                                    if fetched_vol > 0:
+                                        ce_vol = fetched_vol
+                                        st.session_state.last_valid_data['ce_vol'] = fetched_vol
+
+                        time.sleep(0.5) # Prevent Rate Limiting
                         
                         # Fetch PE data
                         pe_data = obj.getMarketData("FULL", {"NFO": pe_tokens})
@@ -152,15 +169,23 @@ if st.session_state.connected:
 
                                 if t_strike == atm:
                                     pe_ltp = item.get('lastTradedPrice', 0.0)
-                                    pe_oi = item.get('opnInterest', 0)
-                                    pe_vol = item.get('volume', 0)
+                                    fetched_oi = item.get('opnInterest', 0)
+                                    fetched_vol = item.get('volume', 0)
+                                    
+                                    # 💡 Update Memory only if API sent real data
+                                    if fetched_oi > 0:
+                                        pe_oi = fetched_oi
+                                        st.session_state.last_valid_data['pe_oi'] = fetched_oi
+                                    if fetched_vol > 0:
+                                        pe_vol = fetched_vol
+                                        st.session_state.last_valid_data['pe_vol'] = fetched_vol
                                     
                     except Exception as e: 
                         st.error(f"Market Data Fetch Error: {e}")
 
-                    # DIAGNOSTIC PRINT: Agar 0 aa raha hai, toh screen pe saaf dikhega kyon!
+                    # DIAGNOSTIC: Show if we are using Memory or not
                     if ce_oi == 0 or pe_oi == 0:
-                        st.warning(f"⚠️ Angel One API returned zero OI for ATM Strike ({atm}). Waiting for next refresh...")
+                        st.warning("⚠️ Waiting for initial Option Chain data to build memory...")
 
                     market_state = "Sideways / Conflicting ⚖️"
                     if spot > sma and pe_oi > ce_oi: market_state = "Bullish Trending 📈"
@@ -175,7 +200,7 @@ if st.session_state.connected:
 
                     st.divider()
 
-                    # 💡 V37 LOGIC EVALUATION
+                    # 💡 EVALUATE WITH MEMORY DATA
                     valid_data = (ce_oi > 0 and pe_oi > 0 and ce_vol > 0 and pe_vol > 0)
                     
                     c_price = spot > sma
@@ -215,7 +240,7 @@ if st.session_state.connected:
                             st.rerun()
 
                     # 📋 2. SNIPER ENTRY CHECKLIST UI
-                    def check_icon(val): return "✅" if val else ("⚠️ Data Pending" if not valid_data else "❌")
+                    def check_icon(val): return "✅" if val else ("⚠️ Pending" if not valid_data else "❌")
 
                     st.subheader("📋 Strict Sniper Checklist")
                     col_a, col_b = st.columns(2)
@@ -237,7 +262,7 @@ if st.session_state.connected:
                     # 🚀 3. TRADE EXECUTION / MONITORING
                     if st.session_state.active_trade is None:
                         if auto_trade:
-                            st.info("🤖 Auto-Trade ENABLED: Waiting for 75% setup (Data must be valid)...")
+                            st.info("🤖 Auto-Trade ENABLED: Waiting for 75% setup...")
                             target_sym = f"{search_prefix}{atm}"
                             curr_time = datetime.now().strftime("%H:%M:%S")
                             
