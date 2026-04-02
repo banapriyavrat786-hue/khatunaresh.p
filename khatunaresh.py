@@ -7,8 +7,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V26", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Stable Action Mode")
+st.set_page_config(page_title="GRK Auto-Sniper V27", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Strict Logic Mode")
 
 # -- SESSION STATE --
 if 'connected' not in st.session_state: st.session_state.connected = False
@@ -35,8 +35,6 @@ def load_tokens():
 
 # -- SIDEBAR CONTROLS --
 st.sidebar.title("⚙️ Robot Controls")
-
-# 💡 NAYA FEATURE: Feed ON/OFF karne ke liye taaki hang na ho
 live_feed = st.sidebar.toggle("🟢 LIVE FEED (Auto-Refresh)", value=False)
 auto_trade = st.sidebar.checkbox("🤖 Enable Auto-Trade Mode", value=False)
 
@@ -68,7 +66,7 @@ if st.session_state.connected:
         lot_size = 50 if index == "NIFTY" else 15
         total_qty = lot_size * int(qty_multiplier)
 
-        # 1. LIVE SPOT FETCH (FAST API)
+        # 1. LIVE SPOT FETCH
         t_name = "Nifty 50" if index=="NIFTY" else "Nifty Bank"
         t_tok = "26000" if index=="NIFTY" else "26009"
         res = obj.ltpData("NSE", t_name, t_tok)
@@ -80,7 +78,6 @@ if st.session_state.connected:
             sma = round(sum(st.session_state.price_history) / len(st.session_state.price_history), 2)
             atm = int(round(spot / (50 if index=="NIFTY" else 100)) * (50 if index=="NIFTY" else 100))
 
-            # 2. TOKEN MAPPING (BUG FIXED: No Decimals)
             search_prefix = f"{index}{expiry_str}{atm}"
             try:
                 ce_row = df[df['symbol'] == f"{search_prefix}CE"].iloc[0]
@@ -89,13 +86,11 @@ if st.session_state.connected:
                 ce_tok = str(ce_row['token']).split('.')[0]
                 pe_tok = str(pe_row['token']).split('.')[0]
 
-                # 3. FAST PREMIUM FETCH
                 ce_res = obj.ltpData("NFO", ce_row['symbol'], ce_tok)
                 pe_res = obj.ltpData("NFO", pe_row['symbol'], pe_tok)
                 ce_ltp = float(ce_res['data']['ltp']) if ce_res.get('status') else 0.0
                 pe_ltp = float(pe_res['data']['ltp']) if pe_res.get('status') else 0.0
 
-                # 4. SAFE OI & VOLUME FETCH (Error Proof)
                 ce_oi, ce_vol, pe_oi, pe_vol = 0, 0, 0, 0
                 try:
                     m_data = obj.getMarketData("FULL", {"NFO": [ce_tok, pe_tok]})
@@ -105,7 +100,7 @@ if st.session_state.connected:
                                 ce_oi, ce_vol = item['opnInterest'], item['volume']
                             elif item['symbolToken'] == pe_tok:
                                 pe_oi, pe_vol = item['opnInterest'], item['volume']
-                except: pass # Agar MarketData slow hai toh crash nahi hoga
+                except: pass
 
                 st.subheader(f"📊 Market Overview (ATM: {atm})")
                 c1, c2, c3, c4 = st.columns(4)
@@ -116,14 +111,18 @@ if st.session_state.connected:
 
                 st.divider()
 
-                # 📋 5. STRICT CHECKLIST LOGIC
+                # 📋 5. STRICT CHECKLIST LOGIC (Fixed)
                 st.subheader("📋 Strict Trade Checklist")
                 
-                c_price, c_mom = (spot > sma), (ce_ltp > pe_ltp)
-                c_oi, c_vol = (ce_oi > pe_oi), (ce_vol > pe_vol)
+                c_price = spot > sma
+                c_mom = ce_ltp > pe_ltp
+                c_oi = ce_oi > pe_oi
+                c_vol = ce_vol > pe_vol
 
-                p_price, p_mom = (spot < sma), (pe_ltp > ce_ltp)
-                p_oi, p_vol = (pe_oi > ce_oi), (pe_vol > ce_vol)
+                p_price = spot < sma
+                p_mom = pe_ltp > ce_ltp
+                p_oi = pe_oi > ce_oi
+                p_vol = pe_vol > ce_vol
 
                 ce_score = sum([c_price, c_mom, c_oi, c_vol])
                 pe_score = sum([p_price, p_mom, p_oi, p_vol])
@@ -133,11 +132,11 @@ if st.session_state.connected:
                 with col_a:
                     st.markdown(f"### 🟢 CALL Sniper ({ce_safety}%)")
                     st.write(f"Trend UP: {'✅' if c_price else '❌'} | Momentum: {'✅' if c_mom else '❌'}")
-                    st.write(f"OI Bias: {'✅' if c_oi else '➖'} | Volume: {'✅' if c_vol else '➖'}")
+                    st.write(f"OI Bias: {'✅' if c_oi else '❌'} | Volume: {'✅' if c_vol else '❌'}")
                 with col_b:
                     st.markdown(f"### 🔴 PUT Sniper ({pe_safety}%)")
                     st.write(f"Trend DOWN: {'✅' if p_price else '❌'} | Momentum: {'✅' if p_mom else '❌'}")
-                    st.write(f"OI Bias: {'✅' if p_oi else '➖'} | Volume: {'✅' if p_vol else '➖'}")
+                    st.write(f"OI Bias: {'✅' if p_oi else '❌'} | Volume: {'✅' if p_vol else '❌'}")
 
                 # 🚀 6. AUTO-TRADE EXECUTION
                 if st.session_state.active_trade is None and auto_trade:
@@ -168,14 +167,10 @@ if st.session_state.connected:
             except Exception as e:
                 st.error(f"Waiting for Correct Options Data... Check Expiry format. Error: {e}")
         
-        # Auto-Refresh Loop
         time.sleep(2)
         st.rerun()
     else:
-        # LIVE FEED OFF UI
         st.info("⏸️ Live Feed is PAUSED. Toggle '🟢 LIVE FEED (Auto-Refresh)' from sidebar to start tracking.")
-        
-        # 📚 SHOW HISTORY EVEN WHEN PAUSED
         if st.session_state.trade_history:
             st.divider()
             st.subheader("📚 Today's Trade History")
