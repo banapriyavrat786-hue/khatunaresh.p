@@ -223,4 +223,177 @@ if st.session_state.connected:
                     is_sl = spot <= t['sl'] if t['type'] == 'CE' else spot >= t['sl']
 
                     if is_target or is_sl:
-                        res_msg = "✅ Target Hit" if is_target else
+                        res_msg = "✅ Target Hit" if is_target else "❌ StopLoss Hit"
+                        
+                        # CLEAN HISTORY APPEND (Syntax-Safe)
+                        trade_record = {
+                            "Time": datetime.now().strftime("%H:%M:%S"), 
+                            "Symbol": t['symbol'], 
+                            "Type": t['type'], 
+                            "Entry": t['entry'], 
+                            "Exit": round(spot, 2), 
+                            "P&L": pnl_spot, 
+                            "Status": res_msg
+                        }
+                        st.session_state.trade_history.append(trade_record)
+                        st.session_state.active_trade = None
+                        
+                        st.success(f"⚡ Trade Closed: {res_msg} at {spot}!")
+                        time.sleep(1)
+                        st.rerun()
+
+                # 5. UI DASHBOARD
+                market_state = "Sideways / Conflicting ⚖️"
+                if spot > sma and pe_oi > ce_oi: 
+                    market_state = "Bullish Trending 📈"
+                elif spot < sma and ce_oi > pe_oi: 
+                    market_state = "Bearish Trending 📉"
+
+                st.subheader(f"📊 Market Condition: {market_state}")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Live Index (Spot)", f"₹{spot}")
+                c2.metric("Trend (SMA)", f"₹{round(sma, 2)}")
+                c3.metric("True Resistance (CE)", f"Strike: {resistance_strike}")
+                c4.metric("True Support (PE)", f"Strike: {support_strike}")
+
+                st.divider()
+
+                st.subheader("🔍 Live ATM Data Feed (Option Writers)")
+                if valid:
+                    d1, d2, d3, d4 = st.columns(4)
+                    d1.metric(label="Call Sellers OI (CE OI)", value=f"{ce_oi:,}")
+                    d2.metric(label="Put Sellers OI (PE OI)", value=f"{pe_oi:,}")
+                    d3.metric(label="Call Volume (CE Vol)", value=f"{ce_vol:,}")
+                    d4.metric(label="Put Volume (PE Vol)", value=f"{pe_vol:,}")
+                else:
+                    st.warning("⚠️ Fetching Data...")
+
+                st.divider()
+
+                def check_icon(val): 
+                    return "✅" if val else ("⚠️ Pending" if not valid else "❌")
+
+                st.subheader("📋 Strict Sniper Checklist")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.markdown(f"### 🟢 CALL Sniper ({ce_safe}%)")
+                    st.write(f"Trend UP (Spot > SMA): {'✅' if c_price else '❌'}")
+                    st.write(f"Momentum (CE > PE): {'✅' if c_mom else '❌'}")
+                    st.write(f"Support Strong (PE OI > CE OI): {check_icon(c_oi)}")
+                    st.write(f"Put Writers Active (PE Vol > CE Vol): {check_icon(c_vol)}")
+                with col_b:
+                    st.markdown(f"### 🔴 PUT Sniper ({pe_safe}%)")
+                    st.write(f"Trend DOWN (Spot < SMA): {'✅' if p_price else '❌'}")
+                    st.write(f"Momentum (PE > CE): {'✅' if p_mom else '❌'}")
+                    st.write(f"Resistance Strong (CE OI > PE OI): {check_icon(p_oi)}")
+                    st.write(f"Call Writers Active (CE Vol > PE Vol): {check_icon(p_vol)}")
+
+                st.divider()
+
+                # 6. AUTO-TRADE ENTRY
+                if st.session_state.active_trade is None:
+                    if auto_trade and valid:
+                        st.info("🤖 Scanning for 75% Setup...")
+                        curr_time = datetime.now().strftime("%H:%M:%S")
+
+                        if ce_safe >= 75.0 and c_price and ce_tok:
+                            try:
+                                # CLEAN ORDER PARAMS (Syntax-Safe)
+                                order_params = {
+                                    "variety": "NORMAL", 
+                                    "tradingsymbol": ce_row['symbol'], 
+                                    "symboltoken": ce_tok, 
+                                    "transactiontype": "BUY", 
+                                    "exchange": "NFO", 
+                                    "ordertype": "MARKET", 
+                                    "producttype": "INTRADAY", 
+                                    "duration": "DAY", 
+                                    "quantity": str(qty)
+                                }
+                                obj.placeOrder(order_params)
+                                
+                                st.session_state.active_trade = {
+                                    "type": "CE", 
+                                    "symbol": ce_row['symbol'], 
+                                    "entry": float(spot), 
+                                    "target": float(spot + tgt), 
+                                    "sl": float(spot - sl), 
+                                    "time": curr_time
+                                }
+                                st.success("🤖 BOUGHT CALL!")
+                            except Exception as e: 
+                                st.error(f"Order Failed: {e}")
+
+                        elif pe_safe >= 75.0 and p_price and pe_tok:
+                            try:
+                                # CLEAN ORDER PARAMS (Syntax-Safe)
+                                order_params = {
+                                    "variety": "NORMAL", 
+                                    "tradingsymbol": pe_row['symbol'], 
+                                    "symboltoken": pe_tok, 
+                                    "transactiontype": "BUY", 
+                                    "exchange": "NFO", 
+                                    "ordertype": "MARKET", 
+                                    "producttype": "INTRADAY", 
+                                    "duration": "DAY", 
+                                    "quantity": str(qty)
+                                }
+                                obj.placeOrder(order_params)
+                                
+                                st.session_state.active_trade = {
+                                    "type": "PE", 
+                                    "symbol": pe_row['symbol'], 
+                                    "entry": float(spot), 
+                                    "target": float(spot - tgt), 
+                                    "sl": float(spot + sl), 
+                                    "time": curr_time
+                                }
+                                st.success("🤖 BOUGHT PUT!")
+                            except Exception as e: 
+                                st.error(f"Order Failed: {e}")
+                    else:
+                        st.warning("⚠️ Waiting for Data Validation or Auto-Trade is OFF.")
+                else:
+                    t = st.session_state.active_trade
+                    pnl_spot = round(spot - t['entry'] if t['type'] == "CE" else t['entry'] - spot, 2)
+                    
+                    st.info(f"🚀 **ACTIVE {t['type']} TRADE** ({t['symbol']})")
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Live Index (Spot)", f"₹{spot}")
+                    col2.metric("Spot Entry", f"₹{t['entry']}")
+                    col3.metric("Target Level", f"₹{t['target']}")
+                    col4.metric("StopLoss Level", f"₹{t['sl']}")
+                    st.metric(label="Live P&L (Index Points)", value=f"{pnl_spot} Pts", delta=pnl_spot)
+                    
+                    if st.button("🚨 MANUAL EXIT NOW", use_container_width=True):
+                        # CLEAN HISTORY APPEND (Syntax-Safe)
+                        trade_record = {
+                            "Time": datetime.now().strftime("%H:%M:%S"), 
+                            "Symbol": t['symbol'], 
+                            "Type": t['type'], 
+                            "Entry": t['entry'], 
+                            "Exit": round(spot, 2), 
+                            "P&L": pnl_spot, 
+                            "Status": "⚠️ Manual Exit"
+                        }
+                        st.session_state.trade_history.append(trade_record)
+                        st.session_state.active_trade = None
+                        st.rerun()
+
+            # 7. HISTORY LEDGER
+            if st.session_state.trade_history:
+                st.divider()
+                st.subheader("📚 Today's Trade History Ledger")
+                st.dataframe(pd.DataFrame(st.session_state.trade_history), use_container_width=True)
+
+        except Exception as e:
+            st.error(f"🚨 Engine Error: {e}")
+
+        time.sleep(3)
+        st.rerun()
+    else:
+        st.info("⏸️ Live Feed is PAUSED.")
+        if st.session_state.trade_history:
+            st.dataframe(pd.DataFrame(st.session_state.trade_history), use_container_width=True)
+else:
+    st.info("Enter MPIN and Connect.")
