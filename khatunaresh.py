@@ -8,8 +8,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V43", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Syntax-Safe Edition")
+st.set_page_config(page_title="GRK Auto-Sniper V45", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Perfect Seller Logic")
 
 # -- SESSION STATE INITIALIZATION --
 for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'last_valid_data']:
@@ -145,6 +145,12 @@ if st.session_state.connected:
                             strike_map[p_tok_id] = {'type': 'PE', 'strike': s}
 
                     try:
+                        # 💡 FIX: FETCH EXACT MOMENTUM PREMIUM SEPARATELY SO IT NEVER FAILS
+                        c_ltp_res = obj.ltpData("NFO", ce_row['symbol'], ce_tok)
+                        p_ltp_res = obj.ltpData("NFO", pe_row['symbol'], pe_tok)
+                        if c_ltp_res and c_ltp_res.get('status'): ce_ltp = float(c_ltp_res['data']['ltp'])
+                        if p_ltp_res and p_ltp_res.get('status'): pe_ltp = float(p_ltp_res['data']['ltp'])
+
                         # CE Option Chain
                         ce_data = obj.getMarketData("FULL", {"NFO": ce_tokens})
                         if ce_data and ce_data.get('status'):
@@ -158,7 +164,6 @@ if st.session_state.connected:
                                     resistance_strike = t_strike
 
                                 if t_strike == atm:
-                                    ce_ltp = item.get('lastTradedPrice', 0.0)
                                     f_oi = item.get('opnInterest', 0)
                                     f_vol = item.get('volume', item.get('tradeVolume', 0))
                                     if f_oi > 0: 
@@ -183,7 +188,6 @@ if st.session_state.connected:
                                     support_strike = t_strike
 
                                 if t_strike == atm:
-                                    pe_ltp = item.get('lastTradedPrice', 0.0)
                                     f_oi = item.get('opnInterest', 0)
                                     f_vol = item.get('volume', item.get('tradeVolume', 0))
                                     if f_oi > 0: 
@@ -195,18 +199,23 @@ if st.session_state.connected:
                     except: 
                         pass
 
-                # 3. VALIDATION & LOGIC
+                # 3. VALIDATION & LOGIC (V45: THE ULTIMATE SELLER LOGIC FIX)
                 valid = (ce_oi > 0 and pe_oi > 0 and ce_vol > 0 and pe_vol > 0)
                 
                 c_price = spot > sma
                 p_price = spot < sma
+                
+                # Momentum Fix
                 c_mom = ce_ltp > pe_ltp
                 p_mom = pe_ltp > ce_ltp
 
                 if valid:
+                    # CALL Lene Ke Liye Support Strong Chahiye (Yani Put Writers > Call Writers)
                     c_oi = pe_oi > ce_oi
-                    p_oi = ce_oi > pe_oi
                     c_vol = pe_vol > ce_vol
+                    
+                    # PUT Lene Ke Liye Resistance Strong Chahiye (Yani Call Writers > Put Writers)
+                    p_oi = ce_oi > pe_oi
                     p_vol = ce_vol > pe_vol
                 else:
                     c_oi = p_oi = c_vol = p_vol = False
@@ -225,7 +234,6 @@ if st.session_state.connected:
                     if is_target or is_sl:
                         res_msg = "✅ Target Hit" if is_target else "❌ StopLoss Hit"
                         
-                        # CLEAN HISTORY APPEND (Syntax-Safe)
                         trade_record = {
                             "Time": datetime.now().strftime("%H:%M:%S"), 
                             "Symbol": t['symbol'], 
@@ -245,9 +253,9 @@ if st.session_state.connected:
                 # 5. UI DASHBOARD
                 market_state = "Sideways / Conflicting ⚖️"
                 if spot > sma and pe_oi > ce_oi: 
-                    market_state = "Bullish Trending 📈"
+                    market_state = "Bullish (Put Writers Strong) 📈"
                 elif spot < sma and ce_oi > pe_oi: 
-                    market_state = "Bearish Trending 📉"
+                    market_state = "Bearish (Call Writers Strong) 📉"
 
                 st.subheader(f"📊 Market Condition: {market_state}")
                 c1, c2, c3, c4 = st.columns(4)
@@ -258,7 +266,7 @@ if st.session_state.connected:
 
                 st.divider()
 
-                st.subheader("🔍 Live ATM Data Feed (Option Writers)")
+                st.subheader("🔍 Live ATM Option Writers Data")
                 if valid:
                     d1, d2, d3, d4 = st.columns(4)
                     d1.metric(label="Call Sellers OI (CE OI)", value=f"{ce_oi:,}")
@@ -273,19 +281,19 @@ if st.session_state.connected:
                 def check_icon(val): 
                     return "✅" if val else ("⚠️ Pending" if not valid else "❌")
 
-                st.subheader("📋 Strict Sniper Checklist")
+                st.subheader("📋 Option Seller Logic Checklist")
                 col_a, col_b = st.columns(2)
                 with col_a:
                     st.markdown(f"### 🟢 CALL Sniper ({ce_safe}%)")
                     st.write(f"Trend UP (Spot > SMA): {'✅' if c_price else '❌'}")
-                    st.write(f"Momentum (CE > PE): {'✅' if c_mom else '❌'}")
-                    st.write(f"Support Strong (PE OI > CE OI): {check_icon(c_oi)}")
+                    st.write(f"Momentum (CE > PE): {'✅' if c_mom else '❌'} *(Premium: {ce_ltp})*")
+                    st.write(f"Put Writers Support Market (PE OI > CE OI): {check_icon(c_oi)}")
                     st.write(f"Put Writers Active (PE Vol > CE Vol): {check_icon(c_vol)}")
                 with col_b:
                     st.markdown(f"### 🔴 PUT Sniper ({pe_safe}%)")
                     st.write(f"Trend DOWN (Spot < SMA): {'✅' if p_price else '❌'}")
-                    st.write(f"Momentum (PE > CE): {'✅' if p_mom else '❌'}")
-                    st.write(f"Resistance Strong (CE OI > PE OI): {check_icon(p_oi)}")
+                    st.write(f"Momentum (PE > CE): {'✅' if p_mom else '❌'} *(Premium: {pe_ltp})*")
+                    st.write(f"Call Writers Crushing Market (CE OI > PE OI): {check_icon(p_oi)}")
                     st.write(f"Call Writers Active (CE Vol > PE Vol): {check_icon(p_vol)}")
 
                 st.divider()
@@ -298,7 +306,6 @@ if st.session_state.connected:
 
                         if ce_safe >= 75.0 and c_price and ce_tok:
                             try:
-                                # CLEAN ORDER PARAMS (Syntax-Safe)
                                 order_params = {
                                     "variety": "NORMAL", 
                                     "tradingsymbol": ce_row['symbol'], 
@@ -326,7 +333,6 @@ if st.session_state.connected:
 
                         elif pe_safe >= 75.0 and p_price and pe_tok:
                             try:
-                                # CLEAN ORDER PARAMS (Syntax-Safe)
                                 order_params = {
                                     "variety": "NORMAL", 
                                     "tradingsymbol": pe_row['symbol'], 
@@ -366,7 +372,6 @@ if st.session_state.connected:
                     st.metric(label="Live P&L (Index Points)", value=f"{pnl_spot} Pts", delta=pnl_spot)
                     
                     if st.button("🚨 MANUAL EXIT NOW", use_container_width=True):
-                        # CLEAN HISTORY APPEND (Syntax-Safe)
                         trade_record = {
                             "Time": datetime.now().strftime("%H:%M:%S"), 
                             "Symbol": t['symbol'], 
