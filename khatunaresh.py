@@ -8,8 +8,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V46", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Institutional PCR Engine")
+st.set_page_config(page_title="GRK Auto-Sniper V47", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Bug-Free Institutional Engine")
 
 # -- SESSION STATE INITIALIZATION --
 for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'last_valid_data']:
@@ -117,7 +117,6 @@ if st.session_state.connected:
                 ce_vol = st.session_state.last_valid_data['ce_vol']
                 pe_vol = st.session_state.last_valid_data['pe_vol']
                 
-                # 💡 V46 NEW: Total Range OI for PCR
                 total_ce_oi = st.session_state.last_valid_data['total_ce_oi']
                 total_pe_oi = st.session_state.last_valid_data['total_pe_oi']
                 
@@ -210,7 +209,7 @@ if st.session_state.connected:
                                 st.session_state.last_valid_data['total_pe_oi'] = total_pe_oi
                     except: pass
 
-                # 💡 V46: PCR (Put Call Ratio) CALCULATION
+                # PCR (Put Call Ratio) CALCULATION
                 pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 1.0
 
                 # 3. VALIDATION & PRO-LOGIC
@@ -222,19 +221,16 @@ if st.session_state.connected:
                 p_mom = pe_ltp > ce_ltp
 
                 if valid:
-                    # ATM Battle
                     c_oi = pe_oi > ce_oi
                     c_vol = pe_vol > ce_vol
                     p_oi = ce_oi > pe_oi
                     p_vol = ce_vol > pe_vol
                     
-                    # 💡 V46 NEW: Global Trend Battle (PCR)
-                    c_pcr = pcr >= 1.0  # Put Writers controlling overall market
-                    p_pcr = pcr <= 1.0  # Call Writers controlling overall market
+                    c_pcr = pcr >= 1.0  
+                    p_pcr = pcr <= 1.0  
                 else:
                     c_oi = p_oi = c_vol = p_vol = c_pcr = p_pcr = False
 
-                # 💡 V46 NEW: 5 Parameters (Each 20%). Passing grade is 80%
                 ce_safe = round((sum([c_price, c_mom, c_oi, c_vol, c_pcr]) / 5) * 100, 1)
                 pe_safe = round((sum([p_price, p_mom, p_oi, p_vol, p_pcr]) / 5) * 100, 1)
 
@@ -269,7 +265,6 @@ if st.session_state.connected:
 
                 st.divider()
 
-                # 💡 V46 NEW: Advanced Data Display
                 st.subheader("🔍 Institutional Data Feed (7 Strikes)")
                 if valid:
                     d1, d2, d3, d4 = st.columns(4)
@@ -321,7 +316,8 @@ if st.session_state.connected:
                             try:
                                 order_params = {"variety": "NORMAL", "tradingsymbol": pe_row['symbol'], "symboltoken": pe_tok, "transactiontype": "BUY", "exchange": "NFO", "ordertype": "MARKET", "producttype": "INTRADAY", "duration": "DAY", "quantity": str(qty)}
                                 obj.placeOrder(order_params)
-                                st.session_state.active_trade = {"type": "PE", "symbol": pe_row['symbol'], "entry": float(spot), "target": float(spot - tgt), "sl": float(spot - sl), "time": curr_time}
+                                # 💡 V47 FIX: PUT SL is now 'spot + sl' NOT 'spot - sl'
+                                st.session_state.active_trade = {"type": "PE", "symbol": pe_row['symbol'], "entry": float(spot), "target": float(spot - tgt), "sl": float(spot + sl), "time": curr_time}
                                 st.success("🤖 BOUGHT PUT!")
                             except Exception as e: st.error(f"Order Failed: {e}")
                     else:
