@@ -8,8 +8,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V49", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Dynamic SMA Engine")
+st.set_page_config(page_title="GRK Auto-Sniper V50", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Option Buyer Logic")
 
 # -- SESSION STATE INITIALIZATION --
 for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'last_valid_data']:
@@ -56,9 +56,7 @@ tgt = st.sidebar.number_input("Target Points", 40.0, step=5.0)
 sl = st.sidebar.number_input("Stoploss Points", 20.0, step=5.0)
 
 st.sidebar.subheader("🎛️ Advanced Filters")
-# 💡 V49 NEW: Custom SMA Speed
 sma_ticks = st.sidebar.number_input("SMA Speed (Ticks History)", min_value=10, max_value=200, value=30, step=10)
-# 💡 V49 FIX: Reduced Default Buffer so it catches moves!
 trend_buffer = st.sidebar.number_input("Trend Noise Buffer (Points)", value=2.0, step=0.5)
 
 mpin = st.sidebar.text_input("MPIN", type="password")
@@ -101,10 +99,8 @@ if st.session_state.connected:
             if res and res.get('status'):
                 spot = float(res['data']['ltp'])
 
-                # 💡 V49 FIX: Dynamic SMA Length
                 ph = st.session_state.price_history
                 ph.append(spot)
-                # Ensure memory doesn't exceed requested length
                 while len(ph) > int(sma_ticks): 
                     ph.pop(0)
 
@@ -151,7 +147,6 @@ if st.session_state.connected:
                             strike_map[p_tok_id] = {'type': 'PE', 'strike': s}
 
                     try:
-                        # Momentum Premium Fetch
                         c_ltp_res = obj.ltpData("NFO", ce_row['symbol'], ce_tok)
                         p_ltp_res = obj.ltpData("NFO", pe_row['symbol'], pe_tok)
                         if c_ltp_res and c_ltp_res.get('status'): ce_ltp = float(c_ltp_res['data']['ltp'])
@@ -221,22 +216,25 @@ if st.session_state.connected:
                 # PCR CALCULATION
                 pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 1.0
 
-                # 3. VALIDATION & LOGIC
+                # 3. VALIDATION & BUYER LOGIC (SWAPPED 100%)
                 valid = (ce_oi > 0 and pe_oi > 0 and ce_vol > 0 and pe_vol > 0)
                 
                 c_price = spot > (sma + trend_buffer)
                 p_price = spot < (sma - trend_buffer)
+                
                 c_mom = ce_ltp > pe_ltp
                 p_mom = pe_ltp > ce_ltp
 
                 if valid:
-                    c_oi = pe_oi > ce_oi
-                    c_vol = pe_vol > ce_vol
-                    p_oi = ce_oi > pe_oi
-                    p_vol = ce_vol > pe_vol
+                    # 💡 CALL SNIPER LOGIC (BUYER: Call Data must be Higher)
+                    c_oi = ce_oi > pe_oi
+                    c_vol = ce_vol > pe_vol
+                    c_pcr = pcr <= 1.0  # More Calls than Puts = Bullish
                     
-                    c_pcr = pcr >= 1.0  
-                    p_pcr = pcr <= 1.0  
+                    # 💡 PUT SNIPER LOGIC (BUYER: Put Data must be Higher)
+                    p_oi = pe_oi > ce_oi
+                    p_vol = pe_vol > ce_vol
+                    p_pcr = pcr >= 1.0  # More Puts than Calls = Bearish
                 else:
                     c_oi = p_oi = c_vol = p_vol = c_pcr = p_pcr = False
 
@@ -262,8 +260,8 @@ if st.session_state.connected:
 
                 # 5. UI DASHBOARD
                 market_state = "Sideways / Choppy ⚖️"
-                if pcr >= 1.1 and spot > sma: market_state = "Strong Bullish 🚀"
-                elif pcr <= 0.9 and spot < sma: market_state = "Strong Bearish 🩸"
+                if pcr <= 1.0 and spot > sma: market_state = "Bullish Breakout (Buyers Active) 🚀"
+                elif pcr >= 1.0 and spot < sma: market_state = "Bearish Breakdown (Buyers Active) 🩸"
 
                 st.subheader(f"📊 Market Health: {market_state}")
                 c1, c2, c3, c4 = st.columns(4)
@@ -274,12 +272,12 @@ if st.session_state.connected:
 
                 st.divider()
 
-                st.subheader("🔍 Institutional Data Feed (7 Strikes)")
+                st.subheader("🔍 Institutional Data Feed (Buyer Perspective)")
                 if valid:
                     d1, d2, d3, d4 = st.columns(4)
-                    d1.metric(label="Global Put-Call Ratio (PCR)", value=f"{pcr}", delta="Bullish" if pcr >= 1.0 else "Bearish")
-                    d2.metric(label="ATM Put Writers (Support)", value=f"{pe_oi:,}")
-                    d3.metric(label="ATM Call Writers (Resist)", value=f"{ce_oi:,}")
+                    d1.metric(label="Global Put-Call Ratio (PCR)", value=f"{pcr}", delta="Bullish" if pcr <= 1.0 else "Bearish")
+                    d2.metric(label="ATM Put Buyers (PE OI)", value=f"{pe_oi:,}")
+                    d3.metric(label="ATM Call Buyers (CE OI)", value=f"{ce_oi:,}")
                     d4.metric(label="Overall Range", value=f"{support_strike} - {resistance_strike}")
                 else:
                     st.warning("⚠️ Fetching Data...")
@@ -288,22 +286,22 @@ if st.session_state.connected:
 
                 def check_icon(val): return "✅" if val else ("⚠️ Pending" if not valid else "❌")
 
-                st.subheader("📋 5-Star Pro Sniper Checklist (Needs 80% to Fire)")
+                st.subheader("📋 5-Star Buyer Logic Checklist (Needs 80% to Fire)")
                 col_a, col_b = st.columns(2)
                 with col_a:
                     st.markdown(f"### 🟢 CALL Sniper ({ce_safe}%)")
                     st.write(f"1. Spot Breakout (Spot > SMA + {trend_buffer}): {'✅' if c_price else '❌'}")
                     st.write(f"2. Premium Momentum (CE > PE): {'✅' if c_mom else '❌'} *(₹{ce_ltp})*")
-                    st.write(f"3. ATM Support (PE OI > CE OI): {check_icon(c_oi)}")
-                    st.write(f"4. Volumetric Push (PE Vol > CE Vol): {check_icon(c_vol)}")
-                    st.write(f"5. Global Sentiment (PCR >= 1.0): {check_icon(c_pcr)}")
+                    st.write(f"3. Call Buyers Aggressive (CE OI > PE OI): {check_icon(c_oi)}")
+                    st.write(f"4. Call Volume High (CE Vol > PE Vol): {check_icon(c_vol)}")
+                    st.write(f"5. Global Sentiment Bullish (PCR <= 1.0): {check_icon(c_pcr)}")
                 with col_b:
                     st.markdown(f"### 🔴 PUT Sniper ({pe_safe}%)")
                     st.write(f"1. Spot Breakdown (Spot < SMA - {trend_buffer}): {'✅' if p_price else '❌'}")
                     st.write(f"2. Premium Momentum (PE > CE): {'✅' if p_mom else '❌'} *(₹{pe_ltp})*")
-                    st.write(f"3. ATM Resistance (CE OI > PE OI): {check_icon(p_oi)}")
-                    st.write(f"4. Volumetric Push (CE Vol > PE Vol): {check_icon(p_vol)}")
-                    st.write(f"5. Global Sentiment (PCR <= 1.0): {check_icon(p_pcr)}")
+                    st.write(f"3. Put Buyers Aggressive (PE OI > CE OI): {check_icon(p_oi)}")
+                    st.write(f"4. Put Volume High (PE Vol > CE Vol): {check_icon(p_vol)}")
+                    st.write(f"5. Global Sentiment Bearish (PCR >= 1.0): {check_icon(p_pcr)}")
 
                 st.divider()
 
