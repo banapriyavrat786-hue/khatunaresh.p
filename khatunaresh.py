@@ -8,8 +8,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V48", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Anti-Whipsaw Engine")
+st.set_page_config(page_title="GRK Auto-Sniper V49", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Dynamic SMA Engine")
 
 # -- SESSION STATE INITIALIZATION --
 for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'last_valid_data']:
@@ -51,11 +51,15 @@ index = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 expiry = st.sidebar.text_input("Expiry (e.g. 07APR26)", "07APR26").upper()
 lots = st.sidebar.number_input("Lots", 1, 10, 1)
 
-st.sidebar.subheader("🎯 Target, SL & Filters")
+st.sidebar.subheader("🎯 Trade Parameters")
 tgt = st.sidebar.number_input("Target Points", 40.0, step=5.0)
 sl = st.sidebar.number_input("Stoploss Points", 20.0, step=5.0)
-# 💡 V48 NEW: The Anti-Whipsaw Filter
-trend_buffer = st.sidebar.number_input("Trend Buffer (Noise Filter)", 10.0, step=1.0)
+
+st.sidebar.subheader("🎛️ Advanced Filters")
+# 💡 V49 NEW: Custom SMA Speed
+sma_ticks = st.sidebar.number_input("SMA Speed (Ticks History)", min_value=10, max_value=200, value=30, step=10)
+# 💡 V49 FIX: Reduced Default Buffer so it catches moves!
+trend_buffer = st.sidebar.number_input("Trend Noise Buffer (Points)", value=2.0, step=0.5)
 
 mpin = st.sidebar.text_input("MPIN", type="password")
 
@@ -97,10 +101,12 @@ if st.session_state.connected:
             if res and res.get('status'):
                 spot = float(res['data']['ltp'])
 
-                # 💡 V48 FIX: Increased History length for smoother SMA
+                # 💡 V49 FIX: Dynamic SMA Length
                 ph = st.session_state.price_history
                 ph.append(spot)
-                if len(ph) > 30: ph.pop(0)
+                # Ensure memory doesn't exceed requested length
+                while len(ph) > int(sma_ticks): 
+                    ph.pop(0)
 
                 sma = sum(ph) / len(ph)
                 atm = int(round(spot / step) * step)
@@ -215,13 +221,11 @@ if st.session_state.connected:
                 # PCR CALCULATION
                 pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 1.0
 
-                # 3. VALIDATION & BUFFER LOGIC
+                # 3. VALIDATION & LOGIC
                 valid = (ce_oi > 0 and pe_oi > 0 and ce_vol > 0 and pe_vol > 0)
                 
-                # 💡 V48 FIX: Strict Buffer Zone filtering to prevent whipsaw
                 c_price = spot > (sma + trend_buffer)
                 p_price = spot < (sma - trend_buffer)
-                
                 c_mom = ce_ltp > pe_ltp
                 p_mom = pe_ltp > ce_ltp
 
@@ -257,14 +261,14 @@ if st.session_state.connected:
                         st.rerun()
 
                 # 5. UI DASHBOARD
-                market_state = "Sideways / Noise Zone ⚖️"
-                if c_price and pcr >= 1.0: market_state = "Strong Bullish 🚀"
-                elif p_price and pcr <= 1.0: market_state = "Strong Bearish 🩸"
+                market_state = "Sideways / Choppy ⚖️"
+                if pcr >= 1.1 and spot > sma: market_state = "Strong Bullish 🚀"
+                elif pcr <= 0.9 and spot < sma: market_state = "Strong Bearish 🩸"
 
                 st.subheader(f"📊 Market Health: {market_state}")
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Live Index (Spot)", f"₹{spot}")
-                c2.metric("Trend (SMA)", f"₹{round(sma, 2)}")
+                c2.metric(f"Trend (SMA {sma_ticks})", f"₹{round(sma, 2)}")
                 c3.metric("True Resistance (CE)", f"Strike: {resistance_strike}")
                 c4.metric("True Support (PE)", f"Strike: {support_strike}")
 
@@ -284,18 +288,18 @@ if st.session_state.connected:
 
                 def check_icon(val): return "✅" if val else ("⚠️ Pending" if not valid else "❌")
 
-                st.subheader("📋 Anti-Whipsaw Sniper Checklist (Needs 80% to Fire)")
+                st.subheader("📋 5-Star Pro Sniper Checklist (Needs 80% to Fire)")
                 col_a, col_b = st.columns(2)
                 with col_a:
                     st.markdown(f"### 🟢 CALL Sniper ({ce_safe}%)")
-                    st.write(f"1. Breakout UP (Spot > SMA + {trend_buffer}): {'✅' if c_price else '❌'}")
+                    st.write(f"1. Spot Breakout (Spot > SMA + {trend_buffer}): {'✅' if c_price else '❌'}")
                     st.write(f"2. Premium Momentum (CE > PE): {'✅' if c_mom else '❌'} *(₹{ce_ltp})*")
                     st.write(f"3. ATM Support (PE OI > CE OI): {check_icon(c_oi)}")
                     st.write(f"4. Volumetric Push (PE Vol > CE Vol): {check_icon(c_vol)}")
                     st.write(f"5. Global Sentiment (PCR >= 1.0): {check_icon(c_pcr)}")
                 with col_b:
                     st.markdown(f"### 🔴 PUT Sniper ({pe_safe}%)")
-                    st.write(f"1. Breakdown DOWN (Spot < SMA - {trend_buffer}): {'✅' if p_price else '❌'}")
+                    st.write(f"1. Spot Breakdown (Spot < SMA - {trend_buffer}): {'✅' if p_price else '❌'}")
                     st.write(f"2. Premium Momentum (PE > CE): {'✅' if p_mom else '❌'} *(₹{pe_ltp})*")
                     st.write(f"3. ATM Resistance (CE OI > PE OI): {check_icon(p_oi)}")
                     st.write(f"4. Volumetric Push (CE Vol > PE Vol): {check_icon(p_vol)}")
@@ -306,7 +310,7 @@ if st.session_state.connected:
                 # 6. AUTO-TRADE ENTRY
                 if st.session_state.active_trade is None:
                     if auto_trade and valid:
-                        st.info("🤖 Scanning for 80% Institutional Setup (Avoiding Noise Zone)...")
+                        st.info("🤖 Scanning for 80% Institutional Setup...")
                         curr_time = datetime.now().strftime("%H:%M:%S")
 
                         if ce_safe >= 80.0 and c_price and ce_tok:
