@@ -8,8 +8,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V53", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Dual Engine (VWAP + SMA)")
+st.set_page_config(page_title="GRK Auto-Sniper V54", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Dual Engine + Smart Exit")
 
 # -- SESSION STATE INITIALIZATION --
 for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'vol_history', 'last_valid_data']:
@@ -215,7 +215,7 @@ if st.session_state.connected:
                     except: 
                         pass
 
-                # 💡 V53: DUAL-ENGINE (SMA + VWAP) CALCULATION
+                # 💡 DUAL-ENGINE (SMA + VWAP) CALCULATION
                 current_total_vol = ce_vol + pe_vol
                 ph = st.session_state.price_history
                 vh = st.session_state.vol_history
@@ -227,10 +227,8 @@ if st.session_state.connected:
                     ph.pop(0)
                     vh.pop(0)
 
-                # 1. Calculate SMA
                 sma = sum(ph) / len(ph) if len(ph) > 0 else spot
 
-                # 2. Calculate VWAP
                 if sum(vh) > 0:
                     vwap = sum(p * v for p, v in zip(ph, vh)) / sum(vh)
                 else:
@@ -242,8 +240,6 @@ if st.session_state.connected:
                 valid = (ce_oi > 0 and pe_oi > 0 and ce_vol > 0 and pe_vol > 0)
                 vix_ok = live_vix >= min_vix
 
-                # 💡 V53 FIX: The "Dual-Confirmation" Breakout
-                # Spot MUST be above/below BOTH SMA and VWAP (plus buffer)
                 c_price = (spot > (sma + trend_buffer)) and (spot > (vwap + trend_buffer))
                 p_price = (spot < (sma - trend_buffer)) and (spot < (vwap - trend_buffer))
                 
@@ -264,21 +260,41 @@ if st.session_state.connected:
                 ce_safe = round((sum([c_price, c_mom, c_oi, c_vol, c_pcr]) / 5) * 100, 1)
                 pe_safe = round((sum([p_price, p_mom, p_oi, p_vol, p_pcr]) / 5) * 100, 1)
 
-                # 4. EXITS FIRST
+                # 4. 💡 V54: EXITS FIRST (WITH SMART EXIT LOGIC)
                 if st.session_state.active_trade is not None:
                     t = st.session_state.active_trade
                     pnl_spot = round(spot - t['entry'] if t['type'] == "CE" else t['entry'] - spot, 2)
                     
                     is_target = spot >= t['target'] if t['type'] == 'CE' else spot <= t['target']
                     is_sl = spot <= t['sl'] if t['type'] == 'CE' else spot >= t['sl']
+                    
+                    # 💡 SMART EXIT (Setup Failure Check)
+                    is_smart_exit = False
+                    smart_reason = ""
+                    
+                    if valid:
+                        # Agar Call trade active hai par CE Safety 40% se neeche gir gayi (Data flipped)
+                        if t['type'] == "CE" and ce_safe <= 40.0:
+                            is_smart_exit = True
+                            smart_reason = "Data Flipped Bearish"
+                        # Agar Put trade active hai par PE Safety 40% se neeche gir gayi (Data flipped)
+                        elif t['type'] == "PE" and pe_safe <= 40.0:
+                            is_smart_exit = True
+                            smart_reason = "Data Flipped Bullish"
 
-                    if is_target or is_sl:
-                        res_msg = "✅ Target Hit" if is_target else "❌ StopLoss Hit"
+                    if is_target or is_sl or is_smart_exit:
+                        if is_target: 
+                            res_msg = "✅ Target Hit"
+                        elif is_sl: 
+                            res_msg = "❌ StopLoss Hit"
+                        else:
+                            res_msg = f"🛡️ Smart Exit ({smart_reason})"
+                            
                         trade_record = {"Time": datetime.now().strftime("%H:%M:%S"), "Symbol": t['symbol'], "Type": t['type'], "Entry": t['entry'], "Exit": round(spot, 2), "P&L": pnl_spot, "Status": res_msg}
                         st.session_state.trade_history.append(trade_record)
                         st.session_state.active_trade = None
                         st.success(f"⚡ Trade Closed: {res_msg} at {spot}!")
-                        time.sleep(1)
+                        time.sleep(1.5)
                         st.rerun()
 
                 # 5. UI DASHBOARD
@@ -291,7 +307,6 @@ if st.session_state.connected:
                     market_state = "Bearish Breakdown 🩸"
 
                 st.subheader(f"📊 Market Health: {market_state}")
-                # 💡 V53 UI: Showing Both SMA and VWAP side-by-side
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("Live Index (Spot)", f"₹{spot}")
                 c2.metric("Trend (SMA)", f"₹{round(sma, 2)}")
@@ -320,7 +335,6 @@ if st.session_state.connected:
                 col_a, col_b = st.columns(2)
                 with col_a:
                     st.markdown(f"### 🟢 CALL Sniper ({ce_safe}%)")
-                    # 💡 Check list updated text
                     st.write(f"1. Spot > Both SMA & VWAP (+{trend_buffer}): {'✅' if c_price else '❌'}")
                     st.write(f"2. Premium Momentum (CE > PE): {'✅' if c_mom else '❌'} *(₹{ce_ltp})*")
                     st.write(f"3. Call Buyers Aggressive (CE OI > PE OI): {check_icon(c_oi)}")
