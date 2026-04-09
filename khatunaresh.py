@@ -8,31 +8,26 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V54", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | Dual Engine + Smart Exit")
+st.set_page_config(page_title="GRK Auto-Sniper V55", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Full Option Chain Radar")
 
 # -- SESSION STATE INITIALIZATION --
-for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'vol_history', 'last_valid_data']:
+for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'vol_history', 'last_valid_data', 'oi_memory']:
     if key not in st.session_state:
-        if key == 'price_history': 
-            st.session_state[key] = []
-        elif key == 'vol_history': 
-            st.session_state[key] = []
-        elif key == 'trade_history': 
-            st.session_state[key] = []
-        elif key == 'last_valid_data': 
-            st.session_state[key] = {'ce_oi': 0, 'pe_oi': 0, 'ce_vol': 0, 'pe_vol': 0, 'total_ce_oi': 0, 'total_pe_oi': 0}
-        else: 
-            st.session_state[key] = None
+        if key == 'price_history': st.session_state[key] = []
+        elif key == 'vol_history': st.session_state[key] = []
+        elif key == 'trade_history': st.session_state[key] = []
+        # 💡 V55 NEW: Advanced OI Memory for tracking OI Build-up
+        elif key == 'oi_memory': st.session_state[key] = {} 
+        elif key == 'last_valid_data': st.session_state[key] = {'ce_oi': 0, 'pe_oi': 0, 'ce_vol': 0, 'pe_vol': 0, 'total_ce_oi': 0, 'total_pe_oi': 0}
+        else: st.session_state[key] = None
 
-# -- TIME FUNCTION --
 def get_time():
     try:
         return requests.get("http://worldtimeapi.org/api/timezone/Asia/Kolkata", timeout=5).json()['unixtime']
     except:
         return int(time.time())
 
-# -- TOKEN LOADER --
 @st.cache_data(ttl=3600, show_spinner="Downloading Tokens...")
 def load_tokens():
     try:
@@ -40,8 +35,7 @@ def load_tokens():
         if res.status_code == 200:
             df = pd.DataFrame(res.json())
             return df[df['exch_seg'] == "NFO"]
-    except: 
-        pass
+    except: pass
     return None
 
 # -- SIDEBAR CONTROLS --
@@ -54,14 +48,12 @@ index = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
 expiry = st.sidebar.text_input("Expiry (e.g. 07APR26)", "07APR26").upper()
 lots = st.sidebar.number_input("Lots", 1, 10, 1)
 
-st.sidebar.subheader("🎯 Trade Parameters")
-tgt = st.sidebar.number_input("Target Points", 40.0, step=5.0)
-sl = st.sidebar.number_input("Stoploss Points", 20.0, step=5.0)
-
 st.sidebar.subheader("🎛️ Institutional Filters")
-history_ticks = st.sidebar.number_input("Speed (Ticks History)", min_value=10, max_value=200, value=30, step=10)
+history_ticks = st.sidebar.number_input("VWAP Speed (Ticks)", min_value=10, max_value=200, value=30, step=10)
 min_vix = st.sidebar.number_input("Minimum VIX Required", value=11.5, step=0.5)
-trend_buffer = st.sidebar.number_input("Noise Buffer (Points)", value=2.0, step=0.5)
+trend_buffer = st.sidebar.number_input("VWAP Noise Buffer", value=2.0, step=0.5)
+# 💡 V55 NEW: Trade Zone Buffer (How far from Support/Resistance allows entry)
+zone_buffer = st.sidebar.number_input("Entry Zone Margin (Pts)", value=30.0, step=5.0)
 
 mpin = st.sidebar.text_input("MPIN", type="password")
 
@@ -77,10 +69,8 @@ if st.sidebar.button("🔑 Connect"):
             st.session_state.connected = True
             st.session_state.obj = obj
             st.sidebar.success("✅ Connected Successfully!")
-        else: 
-            st.sidebar.error("❌ Login Failed.")
-    else: 
-        st.sidebar.error("❌ Token Data Failed.")
+        else: st.sidebar.error("❌ Login Failed.")
+    else: st.sidebar.error("❌ Token Data Failed.")
 
 # -- MAIN DASHBOARD --
 if st.session_state.connected:
@@ -119,21 +109,21 @@ if st.session_state.connected:
                 except:
                     ce_tok, pe_tok = "", ""
 
-                # 2. MEMORY ENGINE
+                # 2. FULL OPTION CHAIN RADAR (V55: Scanning 21 Strikes)
                 ce_oi = st.session_state.last_valid_data['ce_oi']
                 pe_oi = st.session_state.last_valid_data['pe_oi']
                 ce_vol = st.session_state.last_valid_data['ce_vol']
                 pe_vol = st.session_state.last_valid_data['pe_vol']
-                
                 total_ce_oi = st.session_state.last_valid_data['total_ce_oi']
                 total_pe_oi = st.session_state.last_valid_data['total_pe_oi']
                 
                 ce_ltp = pe_ltp = 0.0
-                max_ce_oi, resistance_strike = 0, atm + (step*3) 
-                max_pe_oi, support_strike = 0, atm - (step*3)
+                max_ce_oi, resistance_strike = 0, atm + (step*5) 
+                max_pe_oi, support_strike = 0, atm - (step*5)
 
                 if ce_tok and pe_tok:
-                    strikes_to_scan = [atm - step*3, atm - step*2, atm - step, atm, atm + step, atm + step*2, atm + step*3]
+                    # 💡 SCAN 21 STRIKES (+/- 10 strikes from ATM)
+                    strikes_to_scan = [atm + (step * i) for i in range(-10, 11)]
                     ce_tokens = []
                     pe_tokens = []
                     strike_map = {}
@@ -152,11 +142,10 @@ if st.session_state.connected:
                     try:
                         c_ltp_res = obj.ltpData("NFO", ce_row['symbol'], ce_tok)
                         p_ltp_res = obj.ltpData("NFO", pe_row['symbol'], pe_tok)
-                        if c_ltp_res and c_ltp_res.get('status'): 
-                            ce_ltp = float(c_ltp_res['data']['ltp'])
-                        if p_ltp_res and p_ltp_res.get('status'): 
-                            pe_ltp = float(p_ltp_res['data']['ltp'])
+                        if c_ltp_res and c_ltp_res.get('status'): ce_ltp = float(c_ltp_res['data']['ltp'])
+                        if p_ltp_res and p_ltp_res.get('status'): pe_ltp = float(p_ltp_res['data']['ltp'])
 
+                        # PROCESS FULL CALL CHAIN
                         current_total_ce_oi = 0
                         ce_data = obj.getMarketData("FULL", {"NFO": ce_tokens})
                         if ce_data and ce_data.get('status'):
@@ -167,25 +156,21 @@ if st.session_state.connected:
                                 f_oi = item.get('opnInterest', 0)
                                 current_total_ce_oi += f_oi
                                 
-                                if t_strike >= atm and f_oi > max_ce_oi:
+                                # Find Absolute Market Resistance
+                                if f_oi > max_ce_oi:
                                     max_ce_oi = f_oi
                                     resistance_strike = t_strike
 
                                 if t_strike == atm:
                                     f_vol = item.get('volume', item.get('tradeVolume', 0))
-                                    if f_oi > 0: 
-                                        ce_oi = f_oi
-                                        st.session_state.last_valid_data['ce_oi'] = f_oi
-                                    if f_vol > 0: 
-                                        ce_vol = f_vol
-                                        st.session_state.last_valid_data['ce_vol'] = f_vol
+                                    if f_oi > 0: ce_oi = f_oi
+                                    if f_vol > 0: ce_vol = f_vol
                                         
-                            if current_total_ce_oi > 0:
-                                total_ce_oi = current_total_ce_oi
-                                st.session_state.last_valid_data['total_ce_oi'] = total_ce_oi
+                            if current_total_ce_oi > 0: total_ce_oi = current_total_ce_oi
 
                         time.sleep(0.5)
 
+                        # PROCESS FULL PUT CHAIN
                         current_total_pe_oi = 0
                         pe_data = obj.getMarketData("FULL", {"NFO": pe_tokens})
                         if pe_data and pe_data.get('status'):
@@ -196,47 +181,53 @@ if st.session_state.connected:
                                 f_oi = item.get('opnInterest', 0)
                                 current_total_pe_oi += f_oi
 
-                                if t_strike <= atm and f_oi > max_pe_oi:
+                                # Find Absolute Market Support
+                                if f_oi > max_pe_oi:
                                     max_pe_oi = f_oi
                                     support_strike = t_strike
 
                                 if t_strike == atm:
                                     f_vol = item.get('volume', item.get('tradeVolume', 0))
-                                    if f_oi > 0: 
-                                        pe_oi = f_oi
-                                        st.session_state.last_valid_data['pe_oi'] = f_oi
-                                    if f_vol > 0: 
-                                        pe_vol = f_vol
-                                        st.session_state.last_valid_data['pe_vol'] = f_vol
+                                    if f_oi > 0: pe_oi = f_oi
+                                    if f_vol > 0: pe_vol = f_vol
                                         
-                            if current_total_pe_oi > 0:
-                                total_pe_oi = current_total_pe_oi
-                                st.session_state.last_valid_data['total_pe_oi'] = total_pe_oi
-                    except: 
-                        pass
+                            if current_total_pe_oi > 0: total_pe_oi = current_total_pe_oi
+                    except: pass
 
-                # 💡 DUAL-ENGINE (SMA + VWAP) CALCULATION
+                # 💡 DUAL-ENGINE CALCULATION
                 current_total_vol = ce_vol + pe_vol
                 ph = st.session_state.price_history
                 vh = st.session_state.vol_history
                 
                 ph.append(spot)
                 vh.append(current_total_vol)
-                
                 while len(ph) > int(history_ticks): 
                     ph.pop(0)
                     vh.pop(0)
 
                 sma = sum(ph) / len(ph) if len(ph) > 0 else spot
-
-                if sum(vh) > 0:
-                    vwap = sum(p * v for p, v in zip(ph, vh)) / sum(vh)
-                else:
-                    vwap = sma
+                if sum(vh) > 0: vwap = sum(p * v for p, v in zip(ph, vh)) / sum(vh)
+                else: vwap = sma
 
                 pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 1.0
 
-                # 3. VALIDATION & BUYER LOGIC
+                # 3. 💡 RISK, REWARD & ENTRY ZONE CALCULATIONS
+                # Kitna upar ja sakta hai (Distance to Resistance)
+                max_reward_up = round(resistance_strike - spot, 1) if resistance_strike > spot else 0
+                # Kitna against/neeche ja sakta hai (Distance to Support)
+                max_risk_down = round(spot - support_strike, 1) if spot > support_strike else 0
+
+                # Auto-Time Logic (Only active during high momentum hours)
+                current_hour = datetime.now().hour
+                current_min = datetime.now().minute
+                c_time = current_hour + (current_min / 60.0)
+                is_good_time = (9.25 <= c_time <= 11.5) or (13.0 <= c_time <= 15.0)
+
+                # Entry Zone Validation (Near Support = Buy Zone, Near Resistance = Sell Zone)
+                near_support = max_risk_down <= zone_buffer
+                near_resistance = max_reward_up <= zone_buffer
+
+                # 4. VALIDATION & BUYER LOGIC
                 valid = (ce_oi > 0 and pe_oi > 0 and ce_vol > 0 and pe_vol > 0)
                 vix_ok = live_vix >= min_vix
 
@@ -260,7 +251,7 @@ if st.session_state.connected:
                 ce_safe = round((sum([c_price, c_mom, c_oi, c_vol, c_pcr]) / 5) * 100, 1)
                 pe_safe = round((sum([p_price, p_mom, p_oi, p_vol, p_pcr]) / 5) * 100, 1)
 
-                # 4. 💡 V54: EXITS FIRST (WITH SMART EXIT LOGIC)
+                # 5. EXITS FIRST (Smart Exit Engine)
                 if st.session_state.active_trade is not None:
                     t = st.session_state.active_trade
                     pnl_spot = round(spot - t['entry'] if t['type'] == "CE" else t['entry'] - spot, 2)
@@ -268,27 +259,21 @@ if st.session_state.connected:
                     is_target = spot >= t['target'] if t['type'] == 'CE' else spot <= t['target']
                     is_sl = spot <= t['sl'] if t['type'] == 'CE' else spot >= t['sl']
                     
-                    # 💡 SMART EXIT (Setup Failure Check)
                     is_smart_exit = False
                     smart_reason = ""
                     
                     if valid:
-                        # Agar Call trade active hai par CE Safety 40% se neeche gir gayi (Data flipped)
                         if t['type'] == "CE" and ce_safe <= 40.0:
                             is_smart_exit = True
                             smart_reason = "Data Flipped Bearish"
-                        # Agar Put trade active hai par PE Safety 40% se neeche gir gayi (Data flipped)
                         elif t['type'] == "PE" and pe_safe <= 40.0:
                             is_smart_exit = True
                             smart_reason = "Data Flipped Bullish"
 
                     if is_target or is_sl or is_smart_exit:
-                        if is_target: 
-                            res_msg = "✅ Target Hit"
-                        elif is_sl: 
-                            res_msg = "❌ StopLoss Hit"
-                        else:
-                            res_msg = f"🛡️ Smart Exit ({smart_reason})"
+                        if is_target: res_msg = "✅ Target Hit"
+                        elif is_sl: res_msg = "❌ StopLoss Hit"
+                        else: res_msg = f"🛡️ Smart Exit ({smart_reason})"
                             
                         trade_record = {"Time": datetime.now().strftime("%H:%M:%S"), "Symbol": t['symbol'], "Type": t['type'], "Entry": t['entry'], "Exit": round(spot, 2), "P&L": pnl_spot, "Status": res_msg}
                         st.session_state.trade_history.append(trade_record)
@@ -297,33 +282,23 @@ if st.session_state.connected:
                         time.sleep(1.5)
                         st.rerun()
 
-                # 5. UI DASHBOARD
-                market_state = "Sideways / Choppy ⚖️"
-                if not vix_ok: 
-                    market_state = "Dead Market (Low VIX) 💤"
-                elif pcr <= 1.0 and c_price: 
-                    market_state = "Bullish Breakout 🚀"
-                elif pcr >= 1.0 and p_price: 
-                    market_state = "Bearish Breakdown 🩸"
-
-                st.subheader(f"📊 Market Health: {market_state}")
-                c1, c2, c3, c4, c5 = st.columns(5)
+                # 6. UI DASHBOARD
+                st.subheader(f"🌐 Market Radar (Scanned 21 Strikes)")
+                c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Live Index (Spot)", f"₹{spot}")
-                c2.metric("Trend (SMA)", f"₹{round(sma, 2)}")
-                c3.metric("Smart Money (VWAP)", f"₹{round(vwap, 2)}")
-                c4.metric("True Resistance (CE)", f"Strike: {resistance_strike}")
-                c5.metric("True Support (PE)", f"Strike: {support_strike}")
+                c2.metric("Market Support (Base)", f"Strike: {support_strike}")
+                c3.metric("Market Resistance (Top)", f"Strike: {resistance_strike}")
+                c4.metric("Market Range", f"{resistance_strike - support_strike} Pts")
 
                 st.divider()
 
-                st.subheader("🔍 Institutional Data Feed (Buyer Perspective)")
+                st.subheader("🎯 Trade Geometry (Risk vs Reward)")
                 if valid:
-                    d1, d2, d3, d4, d5 = st.columns(5)
-                    d1.metric(label="Global PCR", value=f"{pcr}", delta="Bullish" if pcr <= 1.0 else "Bearish")
-                    d2.metric(label="ATM Put Buyers", value=f"{pe_oi:,}")
-                    d3.metric(label="ATM Call Buyers", value=f"{ce_oi:,}")
+                    d1, d2, d3, d4 = st.columns(4)
+                    d1.metric(label="Max Upside Potential", value=f"+{max_reward_up} Pts", help="Distance to Resistance")
+                    d2.metric(label="Max Downside Risk", value=f"-{max_risk_down} Pts", help="Distance to Support")
+                    d3.metric(label="Time Zone", value="Optimal" if is_good_time else "Dead Zone", delta="Active" if is_good_time else "Wait")
                     d4.metric(label="India VIX", value=f"{live_vix}", delta="Tradeable" if vix_ok else "Avoid Trading", delta_color="normal" if vix_ok else "inverse")
-                    d5.metric(label="Overall Range", value=f"{support_strike} - {resistance_strike}")
                 else:
                     st.warning("⚠️ Fetching Data...")
 
@@ -331,18 +306,20 @@ if st.session_state.connected:
 
                 def check_icon(val): return "✅" if val else ("⚠️ Pending" if not valid else "❌")
 
-                st.subheader("📋 5-Star Dual-Engine Checklist (Needs 80% + VIX to Fire)")
+                st.subheader("📋 5-Star Omniscient Checklist")
                 col_a, col_b = st.columns(2)
                 with col_a:
                     st.markdown(f"### 🟢 CALL Sniper ({ce_safe}%)")
-                    st.write(f"1. Spot > Both SMA & VWAP (+{trend_buffer}): {'✅' if c_price else '❌'}")
+                    st.write(f"0. Smart Entry Zone (Spot near Support): {'✅' if near_support else '❌'}")
+                    st.write(f"1. Breakout (Spot > SMA & VWAP): {'✅' if c_price else '❌'}")
                     st.write(f"2. Premium Momentum (CE > PE): {'✅' if c_mom else '❌'} *(₹{ce_ltp})*")
                     st.write(f"3. Call Buyers Aggressive (CE OI > PE OI): {check_icon(c_oi)}")
                     st.write(f"4. Call Volume High (CE Vol > PE Vol): {check_icon(c_vol)}")
                     st.write(f"5. Global Sentiment Bullish (PCR <= 1.0): {check_icon(c_pcr)}")
                 with col_b:
                     st.markdown(f"### 🔴 PUT Sniper ({pe_safe}%)")
-                    st.write(f"1. Spot < Both SMA & VWAP (-{trend_buffer}): {'✅' if p_price else '❌'}")
+                    st.write(f"0. Smart Entry Zone (Spot near Resistance): {'✅' if near_resistance else '❌'}")
+                    st.write(f"1. Breakdown (Spot < SMA & VWAP): {'✅' if p_price else '❌'}")
                     st.write(f"2. Premium Momentum (PE > CE): {'✅' if p_mom else '❌'} *(₹{pe_ltp})*")
                     st.write(f"3. Put Buyers Aggressive (PE OI > CE OI): {check_icon(p_oi)}")
                     st.write(f"4. Put Volume High (PE Vol > CE Vol): {check_icon(p_vol)}")
@@ -350,34 +327,32 @@ if st.session_state.connected:
 
                 st.divider()
 
-                # 6. AUTO-TRADE ENTRY
+                # 7. AUTO-TRADE ENTRY
                 if st.session_state.active_trade is None:
-                    if auto_trade and valid and vix_ok:
-                        st.info("🤖 Scanning for 80% Dual-Confirmed Setup...")
+                    if auto_trade and valid and vix_ok and is_good_time:
+                        st.info("🤖 Scanning for 80% Confirmed Setup inside Entry Zones...")
                         curr_time = datetime.now().strftime("%H:%M:%S")
 
-                        if ce_safe >= 80.0 and c_price and ce_tok:
+                        # 💡 NEW: Must be in safe entry zone to buy!
+                        if ce_safe >= 80.0 and near_support and ce_tok:
                             try:
                                 order_params = {"variety": "NORMAL", "tradingsymbol": ce_row['symbol'], "symboltoken": ce_tok, "transactiontype": "BUY", "exchange": "NFO", "ordertype": "MARKET", "producttype": "INTRADAY", "duration": "DAY", "quantity": str(qty)}
                                 obj.placeOrder(order_params)
-                                st.session_state.active_trade = {"type": "CE", "symbol": ce_row['symbol'], "entry": float(spot), "target": float(spot + tgt), "sl": float(spot - sl), "time": curr_time}
-                                st.success("🤖 BOUGHT CALL!")
-                            except Exception as e: 
-                                st.error(f"Order Failed: {e}")
+                                st.session_state.active_trade = {"type": "CE", "symbol": ce_row['symbol'], "entry": float(spot), "target": float(spot + max_reward_up), "sl": float(spot - max_risk_down), "time": curr_time}
+                                st.success("🤖 BOUGHT CALL at Support!")
+                            except Exception as e: st.error(f"Order Failed: {e}")
 
-                        elif pe_safe >= 80.0 and p_price and pe_tok:
+                        elif pe_safe >= 80.0 and near_resistance and pe_tok:
                             try:
                                 order_params = {"variety": "NORMAL", "tradingsymbol": pe_row['symbol'], "symboltoken": pe_tok, "transactiontype": "BUY", "exchange": "NFO", "ordertype": "MARKET", "producttype": "INTRADAY", "duration": "DAY", "quantity": str(qty)}
                                 obj.placeOrder(order_params)
-                                st.session_state.active_trade = {"type": "PE", "symbol": pe_row['symbol'], "entry": float(spot), "target": float(spot - tgt), "sl": float(spot + sl), "time": curr_time}
-                                st.success("🤖 BOUGHT PUT!")
-                            except Exception as e: 
-                                st.error(f"Order Failed: {e}")
+                                st.session_state.active_trade = {"type": "PE", "symbol": pe_row['symbol'], "entry": float(spot), "target": float(spot - max_risk_down), "sl": float(spot + max_reward_up), "time": curr_time}
+                                st.success("🤖 BOUGHT PUT at Resistance!")
+                            except Exception as e: st.error(f"Order Failed: {e}")
                     else:
-                        if not vix_ok and valid:
-                            st.warning(f"⚠️ Auto-Trade BLOCKED: VIX ({live_vix}) is below minimum requirement ({min_vix}).")
-                        else:
-                            st.warning("⚠️ Waiting for Data Validation or Auto-Trade is OFF.")
+                        if not vix_ok and valid: st.warning(f"⚠️ Auto-Trade BLOCKED: VIX ({live_vix}) is below minimum requirement ({min_vix}).")
+                        elif not is_good_time and valid: st.warning(f"⚠️ Auto-Trade BLOCKED: Currently in Dead Time Zone. Waiting for momentum hours.")
+                        else: st.warning("⚠️ Waiting for Data Validation or Auto-Trade is OFF.")
                 else:
                     t = st.session_state.active_trade
                     pnl_spot = round(spot - t['entry'] if t['type'] == "CE" else t['entry'] - spot, 2)
@@ -385,8 +360,8 @@ if st.session_state.connected:
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Live Index (Spot)", f"₹{spot}")
                     col2.metric("Spot Entry", f"₹{t['entry']}")
-                    col3.metric("Target Level", f"₹{t['target']}")
-                    col4.metric("StopLoss Level", f"₹{t['sl']}")
+                    col3.metric("Auto Target Level", f"₹{t['target']}")
+                    col4.metric("Auto StopLoss Level", f"₹{t['sl']}")
                     st.metric(label="Live P&L (Index Points)", value=f"{pnl_spot} Pts", delta=pnl_spot)
                     
                     if st.button("🚨 MANUAL EXIT NOW", use_container_width=True):
@@ -395,7 +370,7 @@ if st.session_state.connected:
                         st.session_state.active_trade = None
                         st.rerun()
 
-            # 7. HISTORY LEDGER
+            # 8. HISTORY LEDGER
             if st.session_state.trade_history:
                 st.divider()
                 st.subheader("📚 Today's Trade History Ledger")
