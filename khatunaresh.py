@@ -8,8 +8,8 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Auto-Sniper V52", layout="wide")
-st.title("🏹 MKPV Ultra Sniper | VWAP + VIX Engine")
+st.set_page_config(page_title="GRK Auto-Sniper V53", layout="wide")
+st.title("🏹 MKPV Ultra Sniper | Dual Engine (VWAP + SMA)")
 
 # -- SESSION STATE INITIALIZATION --
 for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'vol_history', 'last_valid_data']:
@@ -59,9 +59,9 @@ tgt = st.sidebar.number_input("Target Points", 40.0, step=5.0)
 sl = st.sidebar.number_input("Stoploss Points", 20.0, step=5.0)
 
 st.sidebar.subheader("🎛️ Institutional Filters")
-history_ticks = st.sidebar.number_input("VWAP Speed (Ticks)", min_value=10, max_value=200, value=30, step=10)
+history_ticks = st.sidebar.number_input("Speed (Ticks History)", min_value=10, max_value=200, value=30, step=10)
 min_vix = st.sidebar.number_input("Minimum VIX Required", value=11.5, step=0.5)
-trend_buffer = st.sidebar.number_input("VWAP Noise Buffer", value=2.0, step=0.5)
+trend_buffer = st.sidebar.number_input("Noise Buffer (Points)", value=2.0, step=0.5)
 
 mpin = st.sidebar.text_input("MPIN", type="password")
 
@@ -100,7 +100,7 @@ if st.session_state.connected:
         token = "26000" if index == "NIFTY" else "26009"
 
         try:
-            # 1. FETCH SPOT, VIX & TREND
+            # 1. FETCH SPOT & VIX
             res = obj.ltpData("NSE", name, token)
             vix_res = obj.ltpData("NSE", "INDIA VIX", "26017") 
             
@@ -176,7 +176,6 @@ if st.session_state.connected:
                                     if f_oi > 0: 
                                         ce_oi = f_oi
                                         st.session_state.last_valid_data['ce_oi'] = f_oi
-                                    # 💡 SYNTAX FIXED HERE
                                     if f_vol > 0: 
                                         ce_vol = f_vol
                                         st.session_state.last_valid_data['ce_vol'] = f_vol
@@ -206,7 +205,6 @@ if st.session_state.connected:
                                     if f_oi > 0: 
                                         pe_oi = f_oi
                                         st.session_state.last_valid_data['pe_oi'] = f_oi
-                                    # 💡 SYNTAX FIXED HERE
                                     if f_vol > 0: 
                                         pe_vol = f_vol
                                         st.session_state.last_valid_data['pe_vol'] = f_vol
@@ -217,7 +215,7 @@ if st.session_state.connected:
                     except: 
                         pass
 
-                # 💡 DYNAMIC OPTIONS-WEIGHTED VWAP CALCULATION
+                # 💡 V53: DUAL-ENGINE (SMA + VWAP) CALCULATION
                 current_total_vol = ce_vol + pe_vol
                 ph = st.session_state.price_history
                 vh = st.session_state.vol_history
@@ -229,20 +227,25 @@ if st.session_state.connected:
                     ph.pop(0)
                     vh.pop(0)
 
+                # 1. Calculate SMA
+                sma = sum(ph) / len(ph) if len(ph) > 0 else spot
+
+                # 2. Calculate VWAP
                 if sum(vh) > 0:
                     vwap = sum(p * v for p, v in zip(ph, vh)) / sum(vh)
                 else:
-                    vwap = sum(ph) / len(ph) 
+                    vwap = sma
 
                 pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 1.0
 
                 # 3. VALIDATION & BUYER LOGIC
                 valid = (ce_oi > 0 and pe_oi > 0 and ce_vol > 0 and pe_vol > 0)
-                
                 vix_ok = live_vix >= min_vix
 
-                c_price = spot > (vwap + trend_buffer)
-                p_price = spot < (vwap - trend_buffer)
+                # 💡 V53 FIX: The "Dual-Confirmation" Breakout
+                # Spot MUST be above/below BOTH SMA and VWAP (plus buffer)
+                c_price = (spot > (sma + trend_buffer)) and (spot > (vwap + trend_buffer))
+                p_price = (spot < (sma - trend_buffer)) and (spot < (vwap - trend_buffer))
                 
                 c_mom = ce_ltp > pe_ltp
                 p_mom = pe_ltp > ce_ltp
@@ -282,17 +285,19 @@ if st.session_state.connected:
                 market_state = "Sideways / Choppy ⚖️"
                 if not vix_ok: 
                     market_state = "Dead Market (Low VIX) 💤"
-                elif pcr <= 1.0 and spot > vwap: 
+                elif pcr <= 1.0 and c_price: 
                     market_state = "Bullish Breakout 🚀"
-                elif pcr >= 1.0 and spot < vwap: 
+                elif pcr >= 1.0 and p_price: 
                     market_state = "Bearish Breakdown 🩸"
 
                 st.subheader(f"📊 Market Health: {market_state}")
-                c1, c2, c3, c4 = st.columns(4)
+                # 💡 V53 UI: Showing Both SMA and VWAP side-by-side
+                c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("Live Index (Spot)", f"₹{spot}")
-                c2.metric("True VWAP", f"₹{round(vwap, 2)}")
-                c3.metric("True Resistance (CE)", f"Strike: {resistance_strike}")
-                c4.metric("True Support (PE)", f"Strike: {support_strike}")
+                c2.metric("Trend (SMA)", f"₹{round(sma, 2)}")
+                c3.metric("Smart Money (VWAP)", f"₹{round(vwap, 2)}")
+                c4.metric("True Resistance (CE)", f"Strike: {resistance_strike}")
+                c5.metric("True Support (PE)", f"Strike: {support_strike}")
 
                 st.divider()
 
@@ -311,18 +316,19 @@ if st.session_state.connected:
 
                 def check_icon(val): return "✅" if val else ("⚠️ Pending" if not valid else "❌")
 
-                st.subheader("📋 5-Star VWAP Buyer Checklist (Needs 80% + VIX to Fire)")
+                st.subheader("📋 5-Star Dual-Engine Checklist (Needs 80% + VIX to Fire)")
                 col_a, col_b = st.columns(2)
                 with col_a:
                     st.markdown(f"### 🟢 CALL Sniper ({ce_safe}%)")
-                    st.write(f"1. Spot VWAP Breakout (Spot > VWAP + {trend_buffer}): {'✅' if c_price else '❌'}")
+                    # 💡 Check list updated text
+                    st.write(f"1. Spot > Both SMA & VWAP (+{trend_buffer}): {'✅' if c_price else '❌'}")
                     st.write(f"2. Premium Momentum (CE > PE): {'✅' if c_mom else '❌'} *(₹{ce_ltp})*")
                     st.write(f"3. Call Buyers Aggressive (CE OI > PE OI): {check_icon(c_oi)}")
                     st.write(f"4. Call Volume High (CE Vol > PE Vol): {check_icon(c_vol)}")
                     st.write(f"5. Global Sentiment Bullish (PCR <= 1.0): {check_icon(c_pcr)}")
                 with col_b:
                     st.markdown(f"### 🔴 PUT Sniper ({pe_safe}%)")
-                    st.write(f"1. Spot VWAP Breakdown (Spot < VWAP - {trend_buffer}): {'✅' if p_price else '❌'}")
+                    st.write(f"1. Spot < Both SMA & VWAP (-{trend_buffer}): {'✅' if p_price else '❌'}")
                     st.write(f"2. Premium Momentum (PE > CE): {'✅' if p_mom else '❌'} *(₹{pe_ltp})*")
                     st.write(f"3. Put Buyers Aggressive (PE OI > CE OI): {check_icon(p_oi)}")
                     st.write(f"4. Put Volume High (PE Vol > CE Vol): {check_icon(p_vol)}")
@@ -333,7 +339,7 @@ if st.session_state.connected:
                 # 6. AUTO-TRADE ENTRY
                 if st.session_state.active_trade is None:
                     if auto_trade and valid and vix_ok:
-                        st.info("🤖 Scanning for 80% Setup with High Momentum (VIX)...")
+                        st.info("🤖 Scanning for 80% Dual-Confirmed Setup...")
                         curr_time = datetime.now().strftime("%H:%M:%S")
 
                         if ce_safe >= 80.0 and c_price and ce_tok:
