@@ -8,13 +8,13 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Sniper V64 | Pro Depth", layout="wide")
-st.title("🏹 MKPV Ultra Sniper V64 | Institutional Depth Engine")
+st.set_page_config(page_title="GRK Sniper V66 | Ultra Deep Engine", layout="wide")
+st.title("🏹 MKPV Ultra Sniper V66 | Dual Force Deep Engine")
 
 # -- SESSION STATE INITIALIZATION --
-for key in ['connected', 'obj', 'token_df', 'active_trade', 'price_history', 'vol_history']:
+for key in ['connected', 'obj', 'token_df', 'active_trade', 'trade_history', 'price_history', 'vol_history']:
     if key not in st.session_state:
-        if key in ['price_history', 'vol_history']: st.session_state[key] = []
+        if key in ['price_history', 'vol_history', 'trade_history']: st.session_state[key] = []
         else: st.session_state[key] = None
 
 def get_time():
@@ -29,24 +29,16 @@ def load_tokens():
         return df[df['exch_seg'] == "NFO"]
     except: return None
 
-# -- HELPER: GET STRIKE DEPTH --
-def get_depth_score(obj, tokens, segment="NFO"):
-    """Returns combined Bid Qty and Ask Qty for a list of tokens"""
-    try:
-        res = obj.getMarketData("FULL", {segment: tokens})
-        t_bid, t_ask = 0, 0
-        if res and res.get('status'):
-            for item in res['data']['fetched']:
-                t_bid += float(item.get('totalBuyQty', 0))
-                t_ask += float(item.get('totalSellQty', 0))
-        return t_bid, t_ask
-    except: return 0, 0
-
-# -- SIDEBAR --
-st.sidebar.header("🕹️ Controls")
+# -- SIDEBAR CONTROLS --
+st.sidebar.title("⚙️ Robot Controls")
+live_feed = st.sidebar.checkbox("🟢 LIVE FEED", value=True)
+auto_trade = st.sidebar.checkbox("🤖 Auto-Trade Mode", value=False)
 index = st.sidebar.radio("Index", ["NIFTY", "BANKNIFTY"])
-expiry = st.sidebar.text_input("Expiry (07APR26)", "07APR26").upper()
+expiry = st.sidebar.text_input("Expiry (e.g. 16APR26)", "16APR26").upper()
 lots = st.sidebar.number_input("Lots", 1, 50, 1)
+tgt = st.sidebar.number_input("Target Points", 40.0, step=5.0)
+sl = st.sidebar.number_input("Stoploss Points", 20.0, step=5.0)
+min_vix = st.sidebar.number_input("Min VIX", value=11.5)
 mpin = st.sidebar.text_input("MPIN", type="password")
 
 if st.sidebar.button("🔑 Connect"):
@@ -60,88 +52,121 @@ if st.sidebar.button("🔑 Connect"):
     else: st.sidebar.error("❌ Login Failed")
 
 # -- MAIN ENGINE --
-if st.session_state.connected:
+if st.session_state.connected and live_feed:
     obj, df = st.session_state.obj, st.session_state.token_df
-    
-    # 1. BASE DATA (SPOT & INDEX DEPTH)
-    idx_tok = "26000" if index == "NIFTY" else "26009"
-    idx_res = obj.getMarketData("FULL", {"NSE": [idx_tok]})
-    
-    if idx_res['status']:
-        m_data = idx_res['data']['fetched'][0]
-        spot = float(m_data['ltp'])
-        idx_bid, idx_ask = float(m_data['totalBuyQty']), float(m_data['totalSellQty'])
-        idx_ratio = round(idx_bid/idx_ask, 2) if idx_ask > 0 else 1.0
-        
-        step = 50 if index == "NIFTY" else 100
-        atm = int(round(spot / step) * step)
-        
-        # 2. STRIKE SELECTION (Support & Resistance Zones)
-        # Resistance Zone: ATM CE + 2 OTM CE
-        res_strikes = [f"{index}{expiry}{atm}CE", f"{index}{expiry}{atm+step}CE", f"{index}{expiry}{atm+(step*2)}CE"]
-        # Support Zone: ATM PE + 2 OTM PE
-        sup_strikes = [f"{index}{expiry}{atm}PE", f"{index}{expiry}{atm-step}PE", f"{index}{expiry}{atm-(step*2)}PE"]
-        
-        def get_toks(s_list):
-            return [str(df[df['symbol'] == s].iloc[0]['token']) for s in s_list if not df[df['symbol'] == s].empty]
+    step = 50 if index == "NIFTY" else 100
+    qty = (50 if index == "NIFTY" else 15) * lots
 
-        ce_tokens, pe_tokens = get_toks(res_strikes), get_toks(sup_strikes)
+    try:
+        # 1. FETCH BASE DATA
+        idx_tok = "26000" if index == "NIFTY" else "26009"
+        res = obj.ltpData("NSE", index, idx_tok)
+        vix_res = obj.ltpData("NSE", "INDIA VIX", "26017")
         
-        # 3. FETCH DEPTH FOR ZONES
-        ce_bid, ce_ask = get_depth_score(obj, ce_tokens)
-        pe_bid, pe_ask = get_depth_score(obj, pe_tokens)
-        
-        # 4. PRESSURE CALCULATIONS
-        # High CE Ask = Strong Resistance | High PE Bid = Strong Support
-        ce_pressure = round(ce_ask / ce_bid, 2) if ce_bid > 0 else 1.0
-        pe_pressure = round(pe_bid / pe_ask, 2) if pe_ask > 0 else 1.0
+        if res and res.get('status'):
+            spot = float(res['data']['ltp'])
+            live_vix = float(vix_res['data']['ltp']) if vix_res.get('status') else 12.0
+            atm = int(round(spot / step) * step)
 
-        # -- DASHBOARD UI --
-        st.subheader(f"📊 {index} Master Dashboard (Spot: ₹{spot})")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Index Orderbook Ratio", idx_ratio, delta="Bullish" if idx_ratio > 1 else "Bearish")
-        c2.metric("Resistance (CE) Pressure", f"{ce_pressure}x", delta="Heavy Sellers" if ce_pressure > 1.1 else "Sellers Fleeing", delta_color="inverse")
-        c3.metric("Support (PE) Pressure", f"{pe_pressure}x", delta="Heavy Buyers" if pe_pressure > 1.1 else "Weak Support")
+            # 2. GENERATE 20 STRIKES (ATM ± 10)
+            strike_range = range(-10, 11)
+            tokens_to_fetch = []
+            token_map = {}
+            for i in strike_range:
+                for suffix in ["CE", "PE"]:
+                    sym = f"{index}{expiry}{atm + (i * step)}{suffix}"
+                    row = df[df['symbol'] == sym]
+                    if not row.empty:
+                        t = str(row.iloc[0]['token'])
+                        tokens_to_fetch.append(t)
+                        token_map[t] = {"sym": sym, "type": suffix, "strike": atm + (i * step)}
 
-        st.divider()
+            # 3. FETCH FULL MARKET DEPTH & OI
+            full_data = obj.getMarketData("FULL", {"NFO": tokens_to_fetch})
+            depth_list = []
+            total_ce_oi = total_pe_oi = 0
+            ce_atm_ltp = pe_atm_ltp = 0
 
-        # 5. ZONE ANALYSIS BARS
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.markdown("#### 🛡️ Support Zone (PE Strikes)")
-            pe_p = int((pe_bid/(pe_bid+pe_ask))*100) if (pe_bid+pe_ask)>0 else 50
-            st.write(f"Buyer Strength: {pe_p}%")
-            st.progress(pe_p)
-            st.caption(f"Bids: {int(pe_bid)} | Asks: {int(pe_ask)}")
+            if full_data.get('status'):
+                for item in full_data['data']['fetched']:
+                    t_info = token_map.get(item['symbolToken'])
+                    if not t_info: continue
+                    
+                    bid = float(item.get('totalBuyQty', 0))
+                    ask = float(item.get('totalSellQty', 0))
+                    oi = float(item.get('opnInterest', 0))
+                    ltp = float(item.get('ltp', 0))
+                    
+                    if t_info['type'] == "CE": 
+                        total_ce_oi += oi
+                        if t_info['strike'] == atm: ce_atm_ltp = ltp
+                    else: 
+                        total_pe_oi += oi
+                        if t_info['strike'] == atm: pe_atm_ltp = ltp
+
+                    depth_list.append({
+                        "Strike": t_info['strike'], "Type": t_info['type'], 
+                        "LTP": ltp, "Bids": bid, "Asks": ask, "OI": oi,
+                        "Pressure": round(bid/ask, 2) if ask > 0 else 1.0
+                    })
+
+            # 4. INDICATORS CALCULATION
+            pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 1.0
+            st.session_state.price_history.append(spot)
+            if len(st.session_state.price_history) > 30: st.session_state.price_history.pop(0)
+            sma = sum(st.session_state.price_history) / len(st.session_state.price_history)
+
+            # 5. UI DASHBOARD
+            st.subheader(f"📊 {index} Institutional Dashboard | Spot: ₹{spot}")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("India VIX", live_vix, delta="Safe" if live_vix > min_vix else "Low Vol")
+            m2.metric("Global PCR", pcr, delta="Bullish" if pcr > 1 else "Bearish")
+            m3.metric("Trend (SMA 30)", round(sma, 2))
+            m4.metric("ATM CE/PE LTP", f"{ce_atm_ltp} / {pe_atm_ltp}")
+
+            # 6. DEEP DATA TABLES
+            master_df = pd.DataFrame(depth_list)
+            col_ce, col_pe = st.columns(2)
+            with col_ce:
+                st.markdown("### 🔴 CALL Resistance Depth (Top 10)")
+                st.dataframe(master_df[master_df['Type']=="CE"].sort_values("Strike").tail(10), use_container_width=True)
+            with col_pe:
+                st.markdown("### 🟢 PUT Support Depth (Top 10)")
+                st.dataframe(master_df[master_df['Type']=="PE"].sort_values("Strike").head(10), use_container_width=True)
+
+            # 7. 5-STAR SNIPER LOGIC
+            st.divider()
+            c_price = spot > sma
+            c_oi = pcr > 1.0
+            c_depth = master_df[master_df['Type']=="PE"]['Bids'].sum() > master_df[master_df['Type']=="CE"]['Asks'].sum()
             
-        with col_b:
-            st.markdown("#### 🏰 Resistance Zone (CE Strikes)")
-            ce_p = int((ce_ask/(ce_bid+ce_ask))*100) if (ce_bid+ce_ask)>0 else 50
-            st.write(f"Seller Strength: {ce_p}%")
-            st.progress(ce_p)
-            st.caption(f"Asks: {int(ce_ask)} | Bids: {int(ce_bid)}")
+            ce_score = sum([c_price, c_oi, c_depth, ce_atm_ltp > pe_atm_ltp])
+            pe_score = sum([not c_price, not c_oi, not c_depth, pe_atm_ltp > ce_atm_ltp])
 
-        # 6. SMART SNIPER LOGIC
-        st.divider()
-        st.subheader("🎯 Sniper Decision Matrix")
-        
-        buy_call = (idx_ratio > 1.1) and (pe_pressure > 1.3) and (ce_pressure < 1.0)
-        buy_put = (idx_ratio < 0.9) and (ce_pressure > 1.3) and (pe_pressure < 1.0)
-        
-        m1, m2 = st.columns(2)
-        if buy_call:
-            m1.success("🚀 SIGNAL: STRONG BUY CALL (Support is solid, Resistance melting)")
-        else:
-            m1.info("Wait for Call Confirmation...")
+            s1, s2 = st.columns(2)
+            s1.metric("CALL Sniper Confidence", f"{(ce_score/4)*100}%")
+            s2.metric("PUT Sniper Confidence", f"{(pe_score/4)*100}%")
+
+            # 8. AUTO-TRADE EXECUTION
+            if st.session_state.active_trade is None and auto_trade and live_vix > min_vix:
+                if ce_score >= 3:
+                    st.success("🤖 Auto-Buying CALL...")
+                    st.session_state.active_trade = {"type": "CE", "entry": spot, "target": spot+tgt, "sl": spot-sl}
+                elif pe_score >= 3:
+                    st.error("🤖 Auto-Buying PUT...")
+                    st.session_state.active_trade = {"type": "PE", "entry": spot, "target": spot-tgt, "sl": spot+sl}
             
-        if buy_put:
-            m2.error("🩸 SIGNAL: STRONG BUY PUT (Resistance heavy, Support breaking)")
-        else:
-            m2.info("Wait for Put Confirmation...")
+            # 9. ACTIVE TRADE TRACKING
+            if st.session_state.active_trade:
+                t = st.session_state.active_trade
+                pnl = round(spot - t['entry'] if t['type']=="CE" else t['entry'] - spot, 2)
+                st.info(f"🚀 Active {t['type']} Trade | P&L: {pnl} Pts")
+                if st.button("🚨 Emergency Exit"): st.session_state.active_trade = None
 
-        # 7. AUTO REFRESH
-        time.sleep(2)
+            time.sleep(2)
+            st.rerun()
+
+    except Exception as e:
+        st.error(f"Engine Error: {e}")
+        time.sleep(5)
         st.rerun()
-
-    else:
-        st.error("Market Data Fetch Error")
