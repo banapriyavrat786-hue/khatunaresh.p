@@ -11,7 +11,7 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Sniper V71 | Pro Edition", layout="wide")
+st.set_page_config(page_title="GRK Sniper V72 | Depth Fixed", layout="wide")
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -32,7 +32,7 @@ def get_time():
     except: return int(time.time())
 
 # -- SIDEBAR CONTROLS --
-st.sidebar.title("🚀 Sniper V71 Pro")
+st.sidebar.title("🚀 Sniper V72")
 live_feed = st.sidebar.checkbox("🟢 LIVE FEED", value=True)
 auto_trade = st.sidebar.checkbox("🤖 Enable Auto-Trade", value=False)
 
@@ -118,10 +118,20 @@ if st.session_state.connected and live_feed:
                     m = token_map.get(item['symbolToken'])
                     if not m: continue
                     
+                    # Basic extraction
                     b = float(item.get('totalBuyQty', 0))
                     a = float(item.get('totalSellQty', 0))
                     o = float(item.get('opnInterest', 0))
                     ltp = float(item.get('ltp', 0))
+                    
+                    # 💡 V72 FIX: Top 5 Depth Fallback Logic
+                    # Agar totalBuyQty 0 hai, toh depth array se Top 5 buyers ki quantity jod lo
+                    if b == 0 and 'depth' in item and 'buy' in item['depth']:
+                        b = sum(float(lvl.get('quantity', 0)) for lvl in item['depth']['buy'])
+                        
+                    # Agar totalSellQty 0 hai, toh depth array se Top 5 sellers ki quantity jod lo
+                    if a == 0 and 'depth' in item and 'sell' in item['depth']:
+                        a = sum(float(lvl.get('quantity', 0)) for lvl in item['depth']['sell'])
                     
                     if m['type'] == "CE": 
                         ce_oi += o; ce_bid += b; ce_ask += a
@@ -135,7 +145,7 @@ if st.session_state.connected and live_feed:
             pcr = round(pe_oi/ce_oi, 2) if ce_oi > 0 else 1.0
 
             # --- UI: MARKET DASHBOARD ---
-            st.title(f"🏹 {index} COMMAND CENTER V71")
+            st.title(f"🏹 {index} COMMAND CENTER V72")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("LIVE SPOT", f"₹{spot}")
             c2.metric("India VIX", vix, delta="Safe" if vix >= min_vix else "Low Vol", delta_color="normal" if vix >= min_vix else "inverse")
@@ -158,11 +168,10 @@ if st.session_state.connected and live_feed:
                     pe_df = df_m[(df_m['Type']=="PE") & (df_m['Strike'] <= atm + (step*2))].sort_values("Strike", ascending=False).head(10)
                     st.dataframe(pe_df, hide_index=True, use_container_width=True)
 
-            # --- UI: EXECUTION LOGIC (V71 Pro Logic) ---
+            # --- UI: EXECUTION LOGIC ---
             st.divider()
             st.subheader("📋 Sniper Logic Checklist")
             
-            # Smart Institutional Logic (20% Difference Required for ✅)
             chk_ce = {
                 "Spot > SMA (Bull Trend)": spot > sma,
                 "PCR > 1.0 (Put Writers Active)": pcr > 1.0,
