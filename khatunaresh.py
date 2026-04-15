@@ -11,7 +11,7 @@ FIXED_CLIENT_ID = "P51646259"
 API_KEY = "MT72qa1q"
 TOTP_SECRET = "W6SCERQJX4RSU6TXECROABI7TA"
 
-st.set_page_config(page_title="GRK Sniper V72 | Institutional", layout="wide")
+st.set_page_config(page_title="GRK Sniper V75 | Volume Engine", layout="wide")
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -32,7 +32,7 @@ def get_time():
     except: return int(time.time())
 
 # -- SIDEBAR CONTROLS --
-st.sidebar.title("🚀 Sniper V72")
+st.sidebar.title("🚀 Sniper V75")
 live_feed = st.sidebar.checkbox("🟢 LIVE FEED", value=True)
 auto_trade = st.sidebar.checkbox("🤖 Enable Auto-Trade", value=False)
 
@@ -90,9 +90,8 @@ if st.session_state.connected and live_feed:
                 st.session_state.price_history.pop(0)
                 
             sma = sum(st.session_state.price_history) / len(st.session_state.price_history)
-            price_trend = "Rising" if spot > sma else "Falling"
 
-            # 2. TOKEN GENERATOR (Safe ±5 range to prevent zero data)
+            # 2. TOKEN GENERATOR (Safe ±5 range)
             ce_tokens, pe_tokens = [], []
             token_map = {}
             for i in range(-5, 6):
@@ -114,43 +113,43 @@ if st.session_state.connected and live_feed:
                 st.error(f"⚠️ Expiry '{expiry}' Not Found.")
                 st.stop()
 
-            # 3. GET FULL DEPTH
+            # 3. GET FULL DEPTH (Focusing on Volume & OI now)
             raw_data_list = []
             if ce_tokens:
                 ce_data = obj.getMarketData("FULL", {"NFO": ce_tokens})
                 if ce_data and ce_data.get('status'): raw_data_list.extend(ce_data['data']['fetched'])
             
-            time.sleep(0.1) # Delay to prevent API overload
+            time.sleep(0.1) 
             
             if pe_tokens:
                 pe_data = obj.getMarketData("FULL", {"NFO": pe_tokens})
                 if pe_data and pe_data.get('status'): raw_data_list.extend(pe_data['data']['fetched'])
 
             master_list = []
-            ce_oi = pe_oi = ce_bid = ce_ask = pe_bid = pe_ask = 0
+            ce_oi = pe_oi = ce_vol = pe_vol = 0
             atm_ce_ltp = atm_pe_ltp = 0
 
             for item in raw_data_list:
                 m = token_map.get(item['symbolToken'])
                 if not m: continue
                 
-                b = float(item.get('totalBuyQty', 0))
-                a = float(item.get('totalSellQty', 0))
+                # Fetching Volume instead of Bids/Asks
                 o = float(item.get('opnInterest', 0))
                 ltp = float(item.get('ltp', 0))
+                v = float(item.get('volume', item.get('tradeVolume', 0))) 
                 
                 if m['type'] == "CE": 
-                    ce_oi += o; ce_bid += b; ce_ask += a
+                    ce_oi += o; ce_vol += v
                     if m['strike'] == atm: atm_ce_ltp = ltp
                 else: 
-                    pe_oi += o; pe_bid += b; pe_ask += a
+                    pe_oi += o; pe_vol += v
                     if m['strike'] == atm: atm_pe_ltp = ltp
                     
-                master_list.append({"Strike": m['strike'], "Type": m['type'], "LTP": ltp, "Bids": b, "Asks": a, "OI": o})
+                master_list.append({"Strike": m['strike'], "Type": m['type'], "LTP": ltp, "Volume": v, "OI": o})
 
             df_m = pd.DataFrame(master_list)
             
-            # --- CALCULATE INSTITUTIONAL S/R & OI TREND ---
+            # --- CALCULATE INSTITUTIONAL S/R ---
             pcr = round(pe_oi/ce_oi, 2) if ce_oi > 0 else 1.0
             inst_resistance, inst_support = 0, 0
             
@@ -160,28 +159,26 @@ if st.session_state.connected and live_feed:
                 pe_data = df_m[df_m['Type'] == 'PE']
                 if not pe_data.empty: inst_support = pe_data.loc[pe_data['OI'].idxmax()]['Strike']
 
-            oi_trend = "Bullish" if (pcr > 1.0 and price_trend == "Rising") else ("Bearish" if (pcr < 1.0 and price_trend == "Falling") else "Mixed")
-
             # --- UI: MARKET DASHBOARD ---
-            st.title(f"🏹 {index} COMMAND CENTER V72")
-            st.subheader(f"📊 Institutional Dashboard | Spot: ₹{spot}")
+            st.title(f"🏹 {index} COMMAND CENTER V75")
+            st.subheader(f"📊 Volume & OI Engine | Spot: ₹{spot}")
 
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("India VIX", vix, delta="Safe" if vix >= min_vix else "Low Vol", delta_color="normal" if vix >= min_vix else "inverse")
             c2.metric("Global PCR", pcr, delta="Bullish" if pcr > 1 else "Bearish")
-            c3.metric("Trend (SMA 30)", round(sma, 2), delta=price_trend)
+            c3.metric("Trend (SMA 30)", round(sma, 2), delta="Rising" if spot > sma else "Falling")
             c4.metric("ATM CE/PE LTP", f"{atm_ce_ltp} / {atm_pe_ltp}")
 
             st.divider()
             
-            # --- UI: NEW S/R METRICS ---
+            # --- UI: S/R METRICS ---
             s1, s2 = st.columns(2)
             s1.metric("🛡️ Inst. Support (Max PE OI)", inst_support, delta="Holding" if spot > inst_support else "Breached", delta_color="normal" if spot > inst_support else "inverse")
             s2.metric("🏰 Inst. Resistance (Max CE OI)", inst_resistance, delta="Holding" if spot < inst_resistance else "Breached", delta_color="inverse" if spot > inst_resistance else "normal")
             
             st.divider()
 
-            # --- UI: BATTLEGROUND ---
+            # --- UI: NEW VOLUME BATTLEGROUND ---
             t1, t2 = st.columns(2)
             
             def format_table(df_subset, r_type):
@@ -190,42 +187,41 @@ if st.session_state.connected and live_feed:
                 else: df_clean['Strike'] = df_clean['Strike'].apply(lambda x: f"🛡️ {x}" if x == inst_support else str(x))
                 
                 df_clean['LTP'] = df_clean['LTP'].apply(lambda x: f"₹ {x:.1f}")
-                df_clean['Bids'] = df_clean['Bids'].apply(lambda x: f"{int(x):,}")
-                df_clean['Asks'] = df_clean['Asks'].apply(lambda x: f"{int(x):,}")
+                df_clean['Volume'] = df_clean['Volume'].apply(lambda x: f"{int(x):,}")
                 df_clean['OI'] = df_clean['OI'].apply(lambda x: f"{int(x):,}")
                 return df_clean
 
             if not df_m.empty:
                 with t1:
-                    st.subheader("🔴 Resistance Zone (CE Asks)")
+                    st.subheader("🔴 Call Zone (Resistance Focus)")
                     ce_df = df_m[df_m['Type']=="CE"].sort_values("Strike")
                     if not ce_df.empty: st.dataframe(format_table(ce_df, "CE"), hide_index=True, use_container_width=True)
                     
                 with t2:
-                    st.subheader("🟢 Support Zone (PE Bids)")
+                    st.subheader("🟢 Put Zone (Support Focus)")
                     pe_df = df_m[df_m['Type']=="PE"].sort_values("Strike", ascending=False)
                     if not pe_df.empty: st.dataframe(format_table(pe_df, "PE"), hide_index=True, use_container_width=True)
 
-            # --- UI: EXECUTION LOGIC ---
+            # --- UI: EXECUTION LOGIC (VOLUME FOCUSED) ---
             st.divider()
-            st.subheader("📋 Market Strength Checklist (V72 Logic)")
+            st.subheader("📋 Volume-Based Logic Checklist (V75)")
             
             chk_ce = {
                 "Spot > SMA (Bull Trend)": spot > sma,
                 "PCR > 1.0 (Put Writers Active)": pcr > 1.0,
-                "Heavy Demand (Bids > Asks by 20%)": pe_bid > (ce_ask * 1.2),
+                "High PE Volume (Support Building)": pe_vol > ce_vol,
                 "CE Premium Expanding": atm_ce_ltp > atm_pe_ltp,
                 "Support Holds (LTP > Support)": spot > inst_support
             }
             chk_pe = {
                 "Spot < SMA (Bear Trend)": spot < sma,
                 "PCR < 1.0 (Call Writers Active)": pcr < 1.0,
-                "Heavy Supply (Asks > Bids by 20%)": ce_ask > (pe_bid * 1.2),
+                "High CE Volume (Resistance Building)": ce_vol > pe_vol,
                 "PE Premium Expanding": atm_pe_ltp > atm_ce_ltp,
                 "Resistance Holds (LTP < Resistance)": spot < inst_resistance
             }
 
-            st.caption(f"⚔️ **Live Battle:** PE Bids (Support): {int(pe_bid):,}  |  CE Asks (Resistance): {int(ce_ask):,}")
+            st.caption(f"⚔️ **Live Volume Battle:** Total PE Vol (Support): {int(pe_vol):,}  |  Total CE Vol (Resistance): {int(ce_vol):,}")
 
             l1, l2 = st.columns(2)
             with l1:
@@ -272,7 +268,6 @@ if st.session_state.connected and live_feed:
                 tr4.metric("Current Spot", f"₹{spot}")
                 tr5.metric("Live P&L (Pts)", pnl, delta=pnl)
                 
-                st.write(f"**Safety/Confidence at Entry:** {t.get('conf', 0)}%")
                 st.write(f"**Targets:** Exit expected around **₹{t['target']}** | Stoploss around **₹{t['sl']}**")
                 
                 is_tgt = spot >= t['target'] if t['type']=="CE" else spot <= t['target']
@@ -313,5 +308,3 @@ if st.session_state.connected and live_feed:
 else:
     if not st.session_state.connected:
         st.info("🔌 System Offline. Enter MPIN and Click Connect.")
-
-# --- END OF CODE ---
